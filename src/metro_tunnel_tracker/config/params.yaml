@@ -1,0 +1,21 @@
+/**:
+  ros__parameters:
+    lidar_topic: "/lidar_points"
+    target_frame: "hesai_lidar"
+    qos_reliability: "reliable"
+    lookahead_distance: 150.0
+    min_distance: 2.5
+    slice_step: 2.5
+    track_corridor_half_width: 0.85
+    clearance_corridor_half_width: 1.75
+    single_tunnel_radius: 2.15
+    min_curve_radius: 180.0
+    max_grade_slope: 0.035
+    default_rail_z: -1.35
+    gauge: 1.520
+    temporal_alpha: 0.30
+    clearance_envelope_topic: "/metro/clearance_envelope"
+    carriage_width: 3.20
+    carriage_height: 3.60
+    carriage_wall_height: 2.70
+    envelope_alpha: 0.18
