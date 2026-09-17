@@ -6,18 +6,21 @@
 namespace metro_tunnel_tracker
 {
 
+/**
+ * @brief Конфигурация геометрического алгоритма трекинга пути
+ */
 struct TrackerConfig
 {
-  float lookahead_distance{150.0f};
-  float min_distance{2.5f};
-  float slice_step{2.5f};
-  float track_corridor_half_width{0.85f};
-  float clearance_corridor_half_width{1.75f};
-  float single_tunnel_radius{2.15f};
-  float min_curve_radius{180.0f};
-  float max_grade_slope{0.035f};
-  float default_rail_z{-1.35f};
-  float gauge{1.520f};
+  float lookahead_distance{150.0f};          ///< Горизонт трассировки пути вперед по ходу движения (м)
+  float min_distance{2.5f};                  ///< Ближняя мертвая зона перед лидаром / сцепка поезда (м)
+  float slice_step{2.5f};                    ///< Шаг продольного сечения тоннеля вдоль оси движения Y (м)
+  float track_corridor_half_width{0.85f};    ///< Полуширина зоны поиска рельсов (|X| <= 0.85 м, колея 1520 мм)
+  float clearance_corridor_half_width{1.75f};///< Полуширина габаритного коридора тоннеля по ГОСТ 9238 (м)
+  float single_tunnel_radius{2.15f};         ///< Номинальный радиус круглого однопутного тоннеля метро (м)
+  float min_curve_radius{180.0f};            ///< Нормативный минимальный радиус кривой пути метрополитена (м)
+  float max_grade_slope{0.035f};             ///< Предельный уклон профиля пути по ПТЭ (35 тысячных / 3.5%)
+  float default_rail_z{-1.35f};              ///< Проектная отметка головки рельса при старте в СК лидара (м)
+  float gauge{1.520f};                       ///< Ширина русской колеи метрополитенов РФ (1520 мм)
 };
 
 
