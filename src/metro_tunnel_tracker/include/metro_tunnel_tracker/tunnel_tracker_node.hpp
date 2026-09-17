@@ -51,6 +51,13 @@ private:
 
   size_t frame_count_{0};
   std::vector<TrackWaypoint> prev_trajectory_;
+
+  // Preallocated buffer for parsing point cloud points to avoid allocations per frame
+  std::vector<Point3D> points_scratch_buf_;
+
+  rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr params_callback_handle_;
+  rcl_interfaces::msg::SetParametersResult on_parameters_set(
+    const std::vector<rclcpp::Parameter> & parameters);
 };
 
 }  // namespace metro_tunnel_tracker

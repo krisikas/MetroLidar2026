@@ -9,37 +9,63 @@ namespace metro_tunnel_tracker
 RailGeometryTracker::RailGeometryTracker(const TrackerConfig & config)
 : config_(config)
 {
+  init_buffers();
+}
+
+void RailGeometryTracker::set_config(const TrackerConfig & config)
+{
+  config_ = config;
+  init_buffers();
+}
+
+void RailGeometryTracker::init_buffers()
+{
+  const float span_y = config_.lookahead_distance - config_.min_distance;
+  const int num_slices = static_cast<int>(std::ceil(span_y / config_.slice_step));
+  if (num_slices <= 0) {
+    slice_ptrs_.clear();
+    slice_y_centers_.clear();
+    return;
+  }
+
+  slice_ptrs_.resize(num_slices);
+  slice_y_centers_.resize(num_slices);
+
+  for (int i = 0; i < num_slices; ++i) {
+    const float y_start = -config_.min_distance - static_cast<float>(i) * config_.slice_step;
+    slice_y_centers_[i] = y_start - 0.5f * config_.slice_step;
+    slice_ptrs_[i].reserve(4096);
+  }
+
+  rail_head_zs_.reserve(2048);
+  track_bed_zs_.reserve(4096);
+  left_wall_xs_.reserve(2048);
+  right_wall_xs_.reserve(2048);
+  trough_xs_.reserve(1024);
+  trajectory_buf_.reserve(num_slices);
 }
 
 std::vector<TrackWaypoint> RailGeometryTracker::estimate_track_trajectory(
   const std::vector<Point3D> & points)
 {
-  std::vector<TrackWaypoint> trajectory;
-  if (points.empty()) {
-    return trajectory;
+  trajectory_buf_.clear();
+  if (points.empty() || slice_ptrs_.empty()) {
+    return trajectory_buf_;
   }
 
-  const float span_y = config_.lookahead_distance - config_.min_distance;
-  const int num_slices = static_cast<int>(std::ceil(span_y / config_.slice_step));
-  if (num_slices <= 0) {
-    return trajectory;
-  }
-
-  std::vector<std::vector<Point3D>> slices(num_slices);
-  std::vector<float> slice_y_centers(num_slices);
-
+  const int num_slices = static_cast<int>(slice_ptrs_.size());
   for (int i = 0; i < num_slices; ++i) {
-    const float y_start = -config_.min_distance - static_cast<float>(i) * config_.slice_step;
-    slice_y_centers[i] = y_start - 0.5f * config_.slice_step;
+    slice_ptrs_[i].clear();
   }
 
+  // Fast pointer-based binning: zero copy of 3D point data
   for (const auto & pt : points) {
     if (pt.y > -config_.min_distance || pt.y < -config_.lookahead_distance) {
       continue;
     }
     const int idx = static_cast<int>((-config_.min_distance - pt.y) / config_.slice_step);
     if (idx >= 0 && idx < num_slices) {
-      slices[idx].push_back(pt);
+      slice_ptrs_[idx].push_back(&pt);
     }
   }
 
@@ -49,33 +75,33 @@ std::vector<TrackWaypoint> RailGeometryTracker::estimate_track_trajectory(
   float dz_dy = 0.0f;
   float curvature = 0.0f;
 
-  trajectory.reserve(num_slices);
+  // Dynamic corridor half-width (adapts to round, rectangular, arched, or station corridors)
+  float nominal_half_width = config_.single_tunnel_radius;
 
   for (int i = 0; i < num_slices; ++i) {
     const float dy = config_.slice_step;
-    const float dist_ahead = -slice_y_centers[i];
+    const float dist_ahead = -slice_y_centers_[i];
 
     const float x_pred = curr_x + dx_dy * dy + 0.5f * curvature * (dy * dy);
     const float z_pred = curr_z + dz_dy * dy;
 
-    // Aggregate points for distance-adaptive density
-    std::vector<Point3D> active_pts = slices[i];
-    if (dist_ahead >= 50.0f) {
-      if (i > 0) {
-        active_pts.insert(active_pts.end(), slices[i - 1].begin(), slices[i - 1].end());
-      }
-      if (i + 1 < num_slices) {
-        active_pts.insert(active_pts.end(), slices[i + 1].begin(), slices[i + 1].end());
-      }
-    }
+    // Neighbor pointers for density accumulation at distances >= 45m
+    const std::vector<const Point3D *> * prev_ptrs = (dist_ahead >= 45.0f && i > 0) ? &slice_ptrs_[i - 1] : nullptr;
+    const std::vector<const Point3D *> * next_ptrs = (dist_ahead >= 45.0f && i + 1 < num_slices) ? &slice_ptrs_[i + 1] : nullptr;
 
-    const float z_rail = estimate_slice_z(active_pts, x_pred, z_pred, dz_dy);
+    const float prev_z = curr_z;
+    const float z_rail = estimate_slice_z(
+      slice_ptrs_[i], prev_ptrs, next_ptrs, prev_z, x_pred, z_pred, dz_dy);
 
-    float left_bound = x_pred - config_.single_tunnel_radius;
-    float right_bound = x_pred + config_.single_tunnel_radius;
+    float left_bound = x_pred - nominal_half_width;
+    float right_bound = x_pred + nominal_half_width;
+    float ceiling_z = 2.6f;
+    float confidence = 1.0f;
 
     curr_x = estimate_slice_x(
-      active_pts, curr_x, z_rail, dist_ahead, dx_dy, curvature, left_bound, right_bound);
+      slice_ptrs_[i], prev_ptrs, next_ptrs, curr_x, z_rail, dist_ahead,
+      dx_dy, curvature, nominal_half_width, left_bound, right_bound,
+      ceiling_z, confidence);
     curr_z = z_rail;
 
     float corridor_l = curr_x - config_.clearance_corridor_half_width;
@@ -89,132 +115,171 @@ std::vector<TrackWaypoint> RailGeometryTracker::estimate_track_trajectory(
 
     TrackWaypoint wp;
     wp.x = curr_x;
-    wp.y = slice_y_centers[i];
+    wp.y = slice_y_centers_[i];
     wp.z_rail = curr_z;
     wp.left_boundary = corridor_l;
     wp.right_boundary = corridor_r;
+    wp.ceiling_z = ceiling_z;
+    wp.confidence = confidence;
     wp.valid = true;
-    trajectory.push_back(wp);
+    trajectory_buf_.push_back(wp);
   }
 
-  if (trajectory.size() >= 3) {
-    for (size_t i = 1; i < trajectory.size() - 1; ++i) {
-      trajectory[i].x = 0.25f * trajectory[i - 1].x + 0.50f * trajectory[i].x + 0.25f * trajectory[i + 1].x;
-      trajectory[i].z_rail = 0.25f * trajectory[i - 1].z_rail + 0.50f * trajectory[i].z_rail + 0.25f * trajectory[i + 1].z_rail;
+  // 3-point smoothing filter on vertical grade (Z) only.
+  // We deliberately do NOT apply chord-cutting smoothing to X so curve arcs are preserved intact.
+  if (trajectory_buf_.size() >= 3) {
+    for (size_t i = 1; i < trajectory_buf_.size() - 1; ++i) {
+      trajectory_buf_[i].z_rail = 0.25f * trajectory_buf_[i - 1].z_rail +
+                                  0.50f * trajectory_buf_[i].z_rail +
+                                  0.25f * trajectory_buf_[i + 1].z_rail;
     }
   }
 
-  for (size_t i = 0; i < trajectory.size(); ++i) {
-    float next_x = trajectory[i].x;
-    float next_y = trajectory[i].y - config_.slice_step;
-    float next_z = trajectory[i].z_rail;
+  // Calculate tangent yaw and pitch
+  for (size_t i = 0; i < trajectory_buf_.size(); ++i) {
+    float next_x = trajectory_buf_[i].x;
+    float next_y = trajectory_buf_[i].y - config_.slice_step;
+    float next_z = trajectory_buf_[i].z_rail;
 
-    if (i + 1 < trajectory.size()) {
-      next_x = trajectory[i + 1].x;
-      next_y = trajectory[i + 1].y;
-      next_z = trajectory[i + 1].z_rail;
+    if (i + 1 < trajectory_buf_.size()) {
+      next_x = trajectory_buf_[i + 1].x;
+      next_y = trajectory_buf_[i + 1].y;
+      next_z = trajectory_buf_[i + 1].z_rail;
     }
 
-    const float delta_x = next_x - trajectory[i].x;
-    const float delta_y = next_y - trajectory[i].y;
-    const float delta_z = next_z - trajectory[i].z_rail;
+    const float delta_x = next_x - trajectory_buf_[i].x;
+    const float delta_y = next_y - trajectory_buf_[i].y;
+    const float delta_z = next_z - trajectory_buf_[i].z_rail;
 
-    trajectory[i].yaw = std::atan2(delta_x, -delta_y);
-    trajectory[i].pitch = std::atan2(delta_z, -delta_y);
+    trajectory_buf_[i].yaw = std::atan2(delta_x, -delta_y);
+    trajectory_buf_[i].pitch = std::atan2(delta_z, -delta_y);
   }
 
-  return trajectory;
+  return trajectory_buf_;
 }
 
 float RailGeometryTracker::estimate_slice_z(
-  const std::vector<Point3D> & slice_points,
+  const std::vector<const Point3D *> & slice_ptrs,
+  const std::vector<const Point3D *> * prev_ptrs,
+  const std::vector<const Point3D *> * next_ptrs,
+  float prev_z,
   float x_pred,
   float z_pred,
   float & dz_dy)
 {
-  std::vector<float> rail_head_zs;
-  std::vector<float> track_bed_zs;
-  rail_head_zs.reserve(slice_points.size() / 8);
-  track_bed_zs.reserve(slice_points.size() / 4);
+  rail_head_zs_.clear();
+  track_bed_zs_.clear();
 
   const float half_gauge = 0.5f * config_.gauge;
   const float rail_left_x = x_pred - half_gauge;
   const float rail_right_x = x_pred + half_gauge;
-  const float rail_search_tol = 0.12f;
+  const float rail_search_tol = 0.16f;
 
-  for (const auto & pt : slice_points) {
-    if (std::abs(pt.x - x_pred) <= config_.track_corridor_half_width) {
-      if (pt.z <= z_pred + 0.50f && pt.z >= z_pred - 0.80f) {
-        track_bed_zs.push_back(pt.z);
+  auto collect_z = [&](const std::vector<const Point3D *> & pts) {
+    for (const auto * pt : pts) {
+      if (std::abs(pt->x - x_pred) <= config_.track_corridor_half_width) {
+        if (pt->z <= z_pred + 0.30f && pt->z >= z_pred - 0.35f) {
+          track_bed_zs_.push_back(pt->z);
 
-        if (std::abs(pt.x - rail_left_x) <= rail_search_tol ||
-            std::abs(pt.x - rail_right_x) <= rail_search_tol) {
-          rail_head_zs.push_back(pt.z);
+          if (std::abs(pt->x - rail_left_x) <= rail_search_tol ||
+              std::abs(pt->x - rail_right_x) <= rail_search_tol) {
+            rail_head_zs_.push_back(pt->z);
+          }
         }
       }
     }
-  }
+  };
+
+  collect_z(slice_ptrs);
+  if (prev_ptrs) collect_z(*prev_ptrs);
+  if (next_ptrs) collect_z(*next_ptrs);
 
   float measured_z = z_pred;
-  if (rail_head_zs.size() >= 3) {
-    std::sort(rail_head_zs.begin(), rail_head_zs.end());
-    measured_z = rail_head_zs[static_cast<size_t>(rail_head_zs.size() * 0.85f)];
-  } else if (track_bed_zs.size() >= 3) {
-    std::sort(track_bed_zs.begin(), track_bed_zs.end());
-    measured_z = track_bed_zs[static_cast<size_t>(track_bed_zs.size() * 0.85f)];
-  } else {
-    return z_pred;
+  if (rail_head_zs_.size() >= 3) {
+    const size_t idx = static_cast<size_t>(rail_head_zs_.size() * 0.85f);
+    auto it = rail_head_zs_.begin() + idx;
+    std::nth_element(rail_head_zs_.begin(), it, rail_head_zs_.end());
+    measured_z = *it;
+  } else if (track_bed_zs_.size() >= 3) {
+    const size_t idx = static_cast<size_t>(track_bed_zs_.size() * 0.85f);
+    auto it = track_bed_zs_.begin() + idx;
+    std::nth_element(track_bed_zs_.begin(), it, track_bed_zs_.end());
+    measured_z = *it;
   }
 
-  const float updated_z = 0.60f * measured_z + 0.40f * z_pred;
-  const float delta = (updated_z - (z_pred - dz_dy * config_.slice_step)) / config_.slice_step;
-  dz_dy = std::clamp(delta, -config_.max_grade_slope, config_.max_grade_slope);
-  return updated_z;
+  // Strictly clamp vertical slope to max_grade_slope (e.g. 0.035 m/m) so the track
+  // cannot climb up pressure gates, ballast irregularities, or obstacles.
+  const float target_slope = (measured_z - prev_z) / config_.slice_step;
+  dz_dy = std::clamp(target_slope, -config_.max_grade_slope, config_.max_grade_slope);
+  return prev_z + dz_dy * config_.slice_step;
 }
 
 float RailGeometryTracker::estimate_slice_x(
-  const std::vector<Point3D> & slice_points,
+  const std::vector<const Point3D *> & slice_ptrs,
+  const std::vector<const Point3D *> * prev_ptrs,
+  const std::vector<const Point3D *> * next_ptrs,
   float prev_x,
   float z_rail,
   float dist_ahead,
   float & dx_dy,
   float & curvature,
+  float & nominal_half_width,
   float & left_bound,
-  float & right_bound)
+  float & right_bound,
+  float & ceiling_z,
+  float & confidence)
 {
   const float dy = config_.slice_step;
   const float x_pred = prev_x + dx_dy * dy + 0.5f * curvature * (dy * dy);
+  const float theta_pred = dx_dy + curvature * dy;
 
-  std::vector<float> left_wall_xs;
-  std::vector<float> right_wall_xs;
+  left_wall_xs_.clear();
+  right_wall_xs_.clear();
 
-  for (const auto & pt : slice_points) {
-    if (pt.z >= z_rail + 0.40f && pt.z <= z_rail + 2.40f) {
-      if (pt.x < x_pred && pt.x >= x_pred - 5.5f) {
-        left_wall_xs.push_back(pt.x);
-      } else if (pt.x > x_pred && pt.x <= x_pred + 5.5f) {
-        right_wall_xs.push_back(pt.x);
+  float max_z_observed = z_rail + 2.5f;
+
+  auto collect_x = [&](const std::vector<const Point3D *> & pts) {
+    for (const auto * pt : pts) {
+      if (pt->z >= z_rail + 0.35f && pt->z <= z_rail + 3.80f) {
+        if (std::abs(pt->x - x_pred) <= 2.5f && pt->z > max_z_observed) {
+          max_z_observed = pt->z;
+        }
+        if (pt->x <= x_pred - 1.25f && pt->x >= x_pred - 4.5f) {
+          left_wall_xs_.push_back(pt->x);
+        } else if (pt->x >= x_pred + 1.25f && pt->x <= x_pred + 4.5f) {
+          right_wall_xs_.push_back(pt->x);
+        }
       }
     }
-  }
+  };
 
-  const size_t min_wall_pts = (dist_ahead < 50.0f) ? 4 : ((dist_ahead < 90.0f) ? 2 : 1);
-  const bool has_left = left_wall_xs.size() >= min_wall_pts;
-  const bool has_right = right_wall_xs.size() >= min_wall_pts;
+  collect_x(slice_ptrs);
+  if (prev_ptrs) collect_x(*prev_ptrs);
+  if (next_ptrs) collect_x(*next_ptrs);
 
-  float l_bound = x_pred - config_.single_tunnel_radius;
-  float r_bound = x_pred + config_.single_tunnel_radius;
+  ceiling_z = max_z_observed - z_rail;
 
+  const size_t min_wall_pts = (dist_ahead < 45.0f) ? 4 : ((dist_ahead < 85.0f) ? 2 : 1);
+  const bool has_left = left_wall_xs_.size() >= min_wall_pts;
+  const bool has_right = right_wall_xs_.size() >= min_wall_pts;
+
+  float l_bound = x_pred - nominal_half_width;
+  float r_bound = x_pred + nominal_half_width;
+
+  // Quantile-based boundary estimation: extracts spatial surface of inner wall facing the track.
+  // Completely immune to point-count imbalance (e.g. 10,000 points on outer wall vs 5 points on inner wall).
   if (has_left) {
-    std::sort(left_wall_xs.begin(), left_wall_xs.end());
-    const size_t idx = static_cast<size_t>(left_wall_xs.size() * 0.90f);
-    l_bound = left_wall_xs[idx];
+    const size_t idx = static_cast<size_t>(left_wall_xs_.size() * 0.90f);
+    auto it = left_wall_xs_.begin() + idx;
+    std::nth_element(left_wall_xs_.begin(), it, left_wall_xs_.end());
+    l_bound = *it;
   }
 
   if (has_right) {
-    std::sort(right_wall_xs.begin(), right_wall_xs.end());
-    const size_t idx = static_cast<size_t>(right_wall_xs.size() * 0.10f);
-    r_bound = right_wall_xs[idx];
+    const size_t idx = static_cast<size_t>(right_wall_xs_.size() * 0.10f);
+    auto it = right_wall_xs_.begin() + idx;
+    std::nth_element(right_wall_xs_.begin(), it, right_wall_xs_.end());
+    r_bound = *it;
   }
 
   left_bound = l_bound;
@@ -223,61 +288,80 @@ float RailGeometryTracker::estimate_slice_x(
   float meas_x = x_pred;
   bool valid_meas = false;
 
-  const float dist_l = x_pred - l_bound;
-  const float dist_r = r_bound - x_pred;
-
   if (has_left && has_right) {
-    const float width = r_bound - l_bound;
-    if (width >= 3.2f && width <= 5.2f && dist_l < 2.8f && dist_r < 2.8f) {
+    const float obs_width = r_bound - l_bound;
+    const float dist_l = x_pred - l_bound;
+    const float dist_r = r_bound - x_pred;
+
+    // Single symmetric corridor (round, square, arched): both walls roughly equidistant
+    if (obs_width >= 3.2f && obs_width <= 5.4f && std::abs(dist_l - dist_r) <= 1.0f) {
+      // Pure geometric midpoint between surfaces: 0% point density bias!
       meas_x = 0.5f * (l_bound + r_bound);
       valid_meas = true;
-    } else if (dist_l < 2.8f && dist_r >= 2.8f) {
-      meas_x = l_bound + config_.single_tunnel_radius;
-      valid_meas = true;
-    } else if (dist_r < 2.8f && dist_l >= 2.8f) {
-      meas_x = r_bound - config_.single_tunnel_radius;
-      valid_meas = true;
-    }
-  } else if (has_left && dist_l < 2.8f) {
-    meas_x = l_bound + config_.single_tunnel_radius;
-    valid_meas = true;
-  } else if (has_right && dist_r < 2.8f) {
-    meas_x = r_bound - config_.single_tunnel_radius;
-    valid_meas = true;
-  }
-
-  std::vector<float> trough_xs;
-  for (const auto & pt : slice_points) {
-    if (std::abs(pt.x - x_pred) <= 0.50f && pt.z < z_rail - 0.15f) {
-      trough_xs.push_back(pt.x);
-    }
-  }
-
-  if (trough_xs.size() >= 5) {
-    const float trough_center = std::accumulate(trough_xs.begin(), trough_xs.end(), 0.0f) / trough_xs.size();
-    if (valid_meas) {
-      meas_x = 0.60f * meas_x + 0.40f * trough_center;
+      if (dist_ahead < 50.0f) {
+        nominal_half_width = 0.90f * nominal_half_width + 0.10f * (0.5f * obs_width);
+      }
     } else {
-      meas_x = trough_center;
+      // Asymmetric corridor (double-track, station, switch): follow near continuous wall
+      const float err_l = std::abs(dist_l - nominal_half_width);
+      const float err_r = std::abs(dist_r - nominal_half_width);
+      if (err_l < 0.65f && err_l <= err_r) {
+        meas_x = l_bound + nominal_half_width;
+        valid_meas = true;
+      } else if (err_r < 0.65f && err_r < err_l) {
+        meas_x = r_bound - nominal_half_width;
+        valid_meas = true;
+      }
+    }
+  } else if (has_right && !has_left) {
+    // Single-wall tracking (crucial for curves where LiDAR shines directly onto outer wall,
+    // while inner wall is shadowed or out of FOV).
+    const float dist_r = r_bound - x_pred;
+    if (std::abs(dist_r - nominal_half_width) < 0.85f) {
+      meas_x = r_bound - nominal_half_width;
+      valid_meas = true;
+    }
+  } else if (has_left && !has_right) {
+    // Single-wall tracking for left-facing curves
+    const float dist_l = x_pred - l_bound;
+    if (std::abs(dist_l - nominal_half_width) < 0.85f) {
+      meas_x = l_bound + nominal_half_width;
       valid_meas = true;
     }
   }
 
+  const float max_curv = 1.0f / config_.min_curve_radius;
   const float max_dslope = dy / config_.min_curve_radius;
+  const float range_conf = (dist_ahead < 60.0f) ? 1.0f :
+                           std::max(0.20f, 1.0f - (dist_ahead - 60.0f) / 110.0f);
+  confidence = valid_meas ? range_conf : (0.5f * range_conf);
 
   if (valid_meas) {
-    const float target_slope = (meas_x - prev_x) / dy;
-    const float dslope = std::clamp(target_slope - dx_dy, -max_dslope, max_dslope);
-    curvature = 0.75f * curvature + 0.25f * (dslope / dy);
-    dx_dy += dslope;
-    dx_dy = std::clamp(dx_dy, -0.45f, 0.45f);
-  } else {
-    curvature *= 0.98f;
-    dx_dy += curvature * dy;
-    dx_dy = std::clamp(dx_dy, -0.45f, 0.45f);
-  }
+    // Critically damped observer: updates position, heading, and curvature without numerical differentiator ringing
+    const float innov_x = meas_x - x_pred;
+    const float K_x = 0.55f * range_conf;
+    const float updated_x = x_pred + K_x * innov_x;
 
-  return prev_x + dx_dy * dy;
+    // Heading innovation over a stable 12m spatial baseline, strictly clamped by min_curve_radius
+    const float max_dtheta = dy / config_.min_curve_radius;
+    float dtheta = (innov_x / 12.0f) * range_conf;
+    dtheta = std::clamp(dtheta, -max_dtheta, max_dtheta);
+    dx_dy = theta_pred + dtheta;
+    dx_dy = std::clamp(dx_dy, -0.45f, 0.45f);
+
+    // Curvature innovation over a stable 28m arc baseline
+    const float dkappa = (2.0f * innov_x / (28.0f * 28.0f)) * range_conf;
+    curvature = (curvature * 0.985f) + dkappa;
+    curvature = std::clamp(curvature, -max_curv, max_curv);
+
+    return updated_x;
+  } else {
+    // On unobserved / sparse slices: propagate smoothly along current curve without decaying heading to zero
+    dx_dy = theta_pred;
+    dx_dy = std::clamp(dx_dy, -0.45f, 0.45f);
+    curvature *= 0.985f;
+    return x_pred;
+  }
 }
 
 }  // namespace metro_tunnel_tracker
