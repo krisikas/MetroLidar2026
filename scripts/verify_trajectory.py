@@ -80,12 +80,20 @@ def run_tracker(points, lookahead=150.0, min_dist=2.5, slice_step=2.5):
             if i + 1 < num_slices:
                 active_pts.extend(slices[i + 1])
 
-        # 1. Z estimation
+        # 1. Z estimation (прицельный поиск головок рельсов X = x_pred +- 0.76 м)
+        half_gauge = 0.76
+        rail_pts = [p[2] for p in active_pts if (abs(p[0] - (x_pred - half_gauge)) <= 0.12 or abs(p[0] - (x_pred + half_gauge)) <= 0.12) and (z_pred - 0.80 <= p[2] <= z_pred + 0.50)]
         track_bed = [p[2] for p in active_pts if abs(p[0] - x_pred) <= 0.85 and (z_pred - 0.80 <= p[2] <= z_pred + 0.50)]
-        if len(track_bed) >= 3:
+
+        if len(rail_pts) >= 3:
+            rail_pts.sort()
+            meas_z = rail_pts[int(len(rail_pts) * 0.85)]
+            curr_z = 0.60 * meas_z + 0.40 * z_pred
+            delta_z = (curr_z - (z_pred - dz_dy * dy)) / dy
+            dz_dy = max(-max_grade_slope, min(max_grade_slope, delta_z))
+        elif len(track_bed) >= 3:
             track_bed.sort()
-            q_idx = int(len(track_bed) * 0.75)
-            meas_z = track_bed[q_idx]
+            meas_z = track_bed[int(len(track_bed) * 0.85)]
             curr_z = 0.60 * meas_z + 0.40 * z_pred
             delta_z = (curr_z - (z_pred - dz_dy * dy)) / dy
             dz_dy = max(-max_grade_slope, min(max_grade_slope, delta_z))
@@ -212,6 +220,35 @@ def test_all_bags():
             all_passed = False
         else:
             print(f"PASSED (Stable corridor width <= {max_corridor_w:.2f}m)")
+
+        # Проверка отсутствия ложных вторжений в габарит вагона (рельсы, КР, платформа):
+        def pt_in_envelope(p):
+            for wp in traj:
+                if abs(wp[0] - p[1]) <= 1.25:
+                    dx = p[0] - wp[1]
+                    dz = p[2] - wp[2] # относительно уровня головки рельса (УГР)
+                    if 0.15 <= dz <= 3.60:
+                        ax = abs(dx)
+                        if dz <= 0.50:
+                            w = 1.15
+                        elif dz <= 1.25:
+                            w = 1.33
+                        elif dz <= 2.60:
+                            w = 1.37
+                        else:
+                            w = 1.37 - (dz - 2.60) / 1.00 * (1.37 - 0.85)
+                        if ax <= w:
+                            return True
+            return False
+
+        near_pts = [p for p in pts if -50.0 <= p[1] <= -3.0]
+        envelope_pts = sum(1 for p in near_pts if pt_in_envelope(p))
+        if 'obstacle' in name:
+            print(f"  [Envelope Verification] {envelope_pts} obstacle points detected inside clearance zone (expected)")
+        else:
+            print(f"  [Envelope Verification] {envelope_pts} false intrusion points (rails, KR, platforms cleared)")
+            if envelope_pts > 50:
+                print(f"  WARNING: Unexpected false intrusions ({envelope_pts} pts) in empty tunnel {name}")
 
     print(f"\n==================================================")
     if all_passed:

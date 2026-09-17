@@ -2,3 +2,5 @@ build/
 install/
 log/
 archive/
+.vscode/
+.DS_Store

@@ -132,29 +132,44 @@ float RailGeometryTracker::estimate_slice_z(
   float z_pred,
   float & dz_dy)
 {
+  std::vector<float> rail_head_zs;
   std::vector<float> track_bed_zs;
+  rail_head_zs.reserve(slice_points.size() / 8);
   track_bed_zs.reserve(slice_points.size() / 4);
+
+  const float half_gauge = 0.5f * config_.gauge;
+  const float rail_left_x = x_pred - half_gauge;
+  const float rail_right_x = x_pred + half_gauge;
+  const float rail_search_tol = 0.12f;
 
   for (const auto & pt : slice_points) {
     if (std::abs(pt.x - x_pred) <= config_.track_corridor_half_width) {
       if (pt.z <= z_pred + 0.50f && pt.z >= z_pred - 0.80f) {
         track_bed_zs.push_back(pt.z);
+
+        if (std::abs(pt.x - rail_left_x) <= rail_search_tol ||
+            std::abs(pt.x - rail_right_x) <= rail_search_tol) {
+          rail_head_zs.push_back(pt.z);
+        }
       }
     }
   }
 
-  if (track_bed_zs.size() >= 3) {
+  float measured_z = z_pred;
+  if (rail_head_zs.size() >= 3) {
+    std::sort(rail_head_zs.begin(), rail_head_zs.end());
+    measured_z = rail_head_zs[static_cast<size_t>(rail_head_zs.size() * 0.85f)];
+  } else if (track_bed_zs.size() >= 3) {
     std::sort(track_bed_zs.begin(), track_bed_zs.end());
-    const size_t q_idx = static_cast<size_t>(track_bed_zs.size() * 0.75f);
-    const float measured_z = track_bed_zs[q_idx];
-
-    const float updated_z = 0.60f * measured_z + 0.40f * z_pred;
-    const float delta = (updated_z - (z_pred - dz_dy * config_.slice_step)) / config_.slice_step;
-    dz_dy = std::clamp(delta, -config_.max_grade_slope, config_.max_grade_slope);
-    return updated_z;
+    measured_z = track_bed_zs[static_cast<size_t>(track_bed_zs.size() * 0.85f)];
+  } else {
+    return z_pred;
   }
 
-  return z_pred;
+  const float updated_z = 0.60f * measured_z + 0.40f * z_pred;
+  const float delta = (updated_z - (z_pred - dz_dy * config_.slice_step)) / config_.slice_step;
+  dz_dy = std::clamp(delta, -config_.max_grade_slope, config_.max_grade_slope);
+  return updated_z;
 }
 
 float RailGeometryTracker::estimate_slice_x(

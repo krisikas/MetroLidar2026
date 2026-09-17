@@ -18,7 +18,7 @@ TunnelTrackerNode::TunnelTrackerNode(const rclcpp::NodeOptions & options)
   this->declare_parameter<std::string>("qos_reliability", "reliable");
   this->declare_parameter<float>("lookahead_distance", 150.0f);
   this->declare_parameter<float>("min_distance", 2.5f);
-  this->declare_parameter<float>("slice_step", 2.5f);
+  this->declare_parameter<float>("slice_step", 1.0f);
   this->declare_parameter<float>("track_corridor_half_width", 0.85f);
   this->declare_parameter<float>("clearance_corridor_half_width", 1.75f);
   this->declare_parameter<float>("single_tunnel_radius", 2.15f);
@@ -27,10 +27,18 @@ TunnelTrackerNode::TunnelTrackerNode(const rclcpp::NodeOptions & options)
   this->declare_parameter<float>("default_rail_z", -1.35f);
   this->declare_parameter<float>("gauge", 1.520f);
   this->declare_parameter<float>("temporal_alpha", 0.30f);
+
+  // Параметры 3D-габарита вагона и зоны контроля свободности (ГОСТ 9238):
   this->declare_parameter<std::string>("clearance_envelope_topic", "/metro/clearance_envelope");
-  this->declare_parameter<float>("carriage_width", 3.20f);
+  this->declare_parameter<float>("rail_head_clearance", 0.15f);
+  this->declare_parameter<float>("undercarriage_half_width", 1.15f);
+  this->declare_parameter<float>("contact_rail_height", 0.50f);
+  this->declare_parameter<float>("platform_clearance_half_width", 1.33f);
+  this->declare_parameter<float>("platform_height", 1.25f);
+  this->declare_parameter<float>("waist_half_width", 1.37f);
+  this->declare_parameter<float>("carriage_wall_height", 2.60f);
+  this->declare_parameter<float>("roof_half_width", 0.85f);
   this->declare_parameter<float>("carriage_height", 3.60f);
-  this->declare_parameter<float>("carriage_wall_height", 2.70f);
   this->declare_parameter<float>("envelope_alpha", 0.18f);
 
   lidar_topic_ = this->get_parameter("lidar_topic").as_string();
@@ -47,10 +55,17 @@ TunnelTrackerNode::TunnelTrackerNode(const rclcpp::NodeOptions & options)
   config_.default_rail_z = this->get_parameter("default_rail_z").as_double();
   config_.gauge = this->get_parameter("gauge").as_double();
   temporal_alpha_ = this->get_parameter("temporal_alpha").as_double();
+
   clearance_envelope_topic_ = this->get_parameter("clearance_envelope_topic").as_string();
-  carriage_width_ = this->get_parameter("carriage_width").as_double();
-  carriage_height_ = this->get_parameter("carriage_height").as_double();
+  rail_head_clearance_ = this->get_parameter("rail_head_clearance").as_double();
+  undercarriage_half_width_ = this->get_parameter("undercarriage_half_width").as_double();
+  contact_rail_height_ = this->get_parameter("contact_rail_height").as_double();
+  platform_clearance_half_width_ = this->get_parameter("platform_clearance_half_width").as_double();
+  platform_height_ = this->get_parameter("platform_height").as_double();
+  waist_half_width_ = this->get_parameter("waist_half_width").as_double();
   carriage_wall_height_ = this->get_parameter("carriage_wall_height").as_double();
+  roof_half_width_ = this->get_parameter("roof_half_width").as_double();
+  carriage_height_ = this->get_parameter("carriage_height").as_double();
   envelope_alpha_ = this->get_parameter("envelope_alpha").as_double();
 
   tracker_.set_config(config_);
@@ -97,8 +112,8 @@ TunnelTrackerNode::TunnelTrackerNode(const rclcpp::NodeOptions & options)
     "Publishing track geometry to: /metro/track_path and /metro/track_markers");
   RCLCPP_INFO(
     this->get_logger(),
-    "Publishing clearance envelope silhouette to: '%s' (W: %.2fm, H: %.2fm, Alpha: %.2f)",
-    clearance_envelope_topic_.c_str(), carriage_width_, carriage_height_, envelope_alpha_);
+    "Publishing clearance envelope silhouette to: '%s' (Z_bot: +%.2fm, W_under: +-%.2fm, W_plat: +-%.2fm, H: %.2fm, Alpha: %.2f)",
+    clearance_envelope_topic_.c_str(), rail_head_clearance_, undercarriage_half_width_, platform_clearance_half_width_, carriage_height_, envelope_alpha_);
 }
 
 void TunnelTrackerNode::heartbeat_timer_callback()
@@ -400,11 +415,6 @@ visualization_msgs::msg::MarkerArray TunnelTrackerNode::create_clearance_envelop
   front_marker.color.b = 0.75f;
   front_marker.color.a = std::min(1.0f, envelope_alpha_ * 2.2f);
 
-  const float half_width = 0.5f * carriage_width_;
-  const float roof_half_w = 0.65f * half_width;
-  const float wall_h = carriage_wall_height_;
-  const float top_h = carriage_height_;
-
   auto make_pt = [](float x, float y, float z) {
     geometry_msgs::msg::Point p;
     p.x = x;
@@ -441,7 +451,7 @@ visualization_msgs::msg::MarkerArray TunnelTrackerNode::create_clearance_envelop
     m.points.push_back(p2);
   };
 
-  std::vector<std::array<geometry_msgs::msg::Point, 6>> rings(trajectory.size());
+  std::vector<std::array<geometry_msgs::msg::Point, 10>> rings(trajectory.size());
 
   for (size_t i = 0; i < trajectory.size(); ++i) {
     float dx = 0.0f;
@@ -463,48 +473,63 @@ visualization_msgs::msg::MarkerArray TunnelTrackerNode::create_clearance_envelop
     }
 
     const auto & wp = trajectory[i];
-    rings[i][0] = make_pt(wp.x - half_width * nx, wp.y - half_width * ny, wp.z_rail);
-    rings[i][1] = make_pt(wp.x - half_width * nx, wp.y - half_width * ny, wp.z_rail + wall_h);
-    rings[i][2] = make_pt(wp.x - roof_half_w * nx, wp.y - roof_half_w * ny, wp.z_rail + top_h);
-    rings[i][3] = make_pt(wp.x + roof_half_w * nx, wp.y + roof_half_w * ny, wp.z_rail + top_h);
-    rings[i][4] = make_pt(wp.x + half_width * nx, wp.y + half_width * ny, wp.z_rail + wall_h);
-    rings[i][5] = make_pt(wp.x + half_width * nx, wp.y + half_width * ny, wp.z_rail);
+    const float z_bot = wp.z_rail + rail_head_clearance_;
+    const float z_cr = wp.z_rail + contact_rail_height_;
+    const float z_plat = wp.z_rail + platform_height_;
+    const float z_wall = wp.z_rail + carriage_wall_height_;
+    const float z_roof = wp.z_rail + carriage_height_;
+
+    const float w_under = undercarriage_half_width_;
+    const float w_plat = platform_clearance_half_width_;
+    const float w_waist = waist_half_width_;
+    const float w_roof = roof_half_width_;
+
+    rings[i][0] = make_pt(wp.x - w_under * nx, wp.y - w_under * ny, z_bot);
+    rings[i][1] = make_pt(wp.x - w_plat * nx, wp.y - w_plat * ny, z_cr);
+    rings[i][2] = make_pt(wp.x - w_plat * nx, wp.y - w_plat * ny, z_plat);
+    rings[i][3] = make_pt(wp.x - w_waist * nx, wp.y - w_waist * ny, z_wall);
+    rings[i][4] = make_pt(wp.x - w_roof * nx, wp.y - w_roof * ny, z_roof);
+    rings[i][5] = make_pt(wp.x + w_roof * nx, wp.y + w_roof * ny, z_roof);
+    rings[i][6] = make_pt(wp.x + w_waist * nx, wp.y + w_waist * ny, z_wall);
+    rings[i][7] = make_pt(wp.x + w_plat * nx, wp.y + w_plat * ny, z_plat);
+    rings[i][8] = make_pt(wp.x + w_plat * nx, wp.y + w_plat * ny, z_cr);
+    rings[i][9] = make_pt(wp.x + w_under * nx, wp.y + w_under * ny, z_bot);
   }
 
   for (size_t i = 0; i + 1 < rings.size(); ++i) {
     const auto & A = rings[i];
     const auto & B = rings[i + 1];
 
-    for (size_t k = 0; k < 6; ++k) {
-      size_t k_next = (k + 1) % 6;
+    for (size_t k = 0; k < 10; ++k) {
+      size_t k_next = (k + 1) % 10;
       add_quad(mesh_marker, A[k], A[k_next], B[k_next], B[k]);
       add_line(wireframe_marker, A[k], B[k]);
     }
 
     if (i % 2 == 0) {
-      for (size_t k = 0; k < 6; ++k) {
-        add_line(wireframe_marker, A[k], A[(k + 1) % 6]);
+      for (size_t k = 0; k < 10; ++k) {
+        add_line(wireframe_marker, A[k], A[(k + 1) % 10]);
       }
     }
   }
 
   if (!rings.empty()) {
     const auto & end_ring = rings.back();
-    for (size_t k = 0; k < 6; ++k) {
-      add_line(wireframe_marker, end_ring[k], end_ring[(k + 1) % 6]);
+    for (size_t k = 0; k < 10; ++k) {
+      add_line(wireframe_marker, end_ring[k], end_ring[(k + 1) % 10]);
     }
 
     const auto & A = rings.front();
-    add_triangle(front_marker, A[0], A[1], A[2]);
-    add_triangle(front_marker, A[0], A[2], A[3]);
-    add_triangle(front_marker, A[0], A[3], A[4]);
-    add_triangle(front_marker, A[0], A[4], A[5]);
+    for (size_t k = 1; k <= 8; ++k) {
+      add_triangle(front_marker, A[0], A[k], A[k + 1]);
+    }
 
-    add_line(wireframe_marker, A[1], A[4]);
+    add_line(wireframe_marker, A[3], A[6]);
+    add_line(wireframe_marker, A[2], A[7]);
     geometry_msgs::msg::Point mid_bottom = make_pt(
-      0.5f * (A[0].x + A[5].x), 0.5f * (A[0].y + A[5].y), A[0].z);
+      0.5f * (A[0].x + A[9].x), 0.5f * (A[0].y + A[9].y), A[0].z);
     geometry_msgs::msg::Point mid_roof = make_pt(
-      0.5f * (A[2].x + A[3].x), 0.5f * (A[2].y + A[3].y), A[2].z);
+      0.5f * (A[4].x + A[5].x), 0.5f * (A[4].y + A[5].y), A[4].z);
     add_line(wireframe_marker, mid_bottom, mid_roof);
   }
 
