@@ -13,14 +13,9 @@ TunnelTrackerNode::TunnelTrackerNode(const rclcpp::NodeOptions & options)
 : Node("tunnel_tracker_node", options),
   tracker_(config_)
 {
-  auto make_float_desc = [](const std::string & desc, double from, double to, double step) {
+  auto make_float_desc = [](const std::string & desc) {
     rcl_interfaces::msg::ParameterDescriptor d;
     d.description = desc;
-    rcl_interfaces::msg::FloatingPointRange r;
-    r.from_value = from;
-    r.to_value = to;
-    r.step = step;
-    d.floating_point_range.push_back(r);
     return d;
   };
 
@@ -29,50 +24,106 @@ TunnelTrackerNode::TunnelTrackerNode(const rclcpp::NodeOptions & options)
   this->declare_parameter<std::string>("qos_reliability", "reliable");
 
   this->declare_parameter("lookahead_distance", 180.0,
-    make_float_desc("Lookahead trajectory distance along forward axis (m)", 10.0, 300.0, 5.0));
+    make_float_desc("Lookahead trajectory distance along forward axis (m)"));
   this->declare_parameter("min_distance", 2.5,
-    make_float_desc("Near blind zone in front of train / coupler (m)", 0.5, 10.0, 0.5));
+    make_float_desc("Near blind zone in front of train / coupler (m)"));
   this->declare_parameter("slice_step", 2.2,
-    make_float_desc("Longitudinal slicing step along motion axis (m)", 0.5, 10.0, 0.1));
+    make_float_desc("Longitudinal slicing step along motion axis (m)"));
+  this->declare_parameter("zone1_start", 35.5,
+    make_float_desc("Start distance of mid zone with 2x slice step (m)"));
+  this->declare_parameter("zone2_start", 79.5,
+    make_float_desc("Start distance of far zone with 4x slice step (m)"));
+  this->declare_parameter("curvature_freeze_dist", 75.0,
+    make_float_desc("Distance beyond which curvature updates are frozen (m)"));
   this->declare_parameter("track_corridor_half_width", 0.85,
-    make_float_desc("Half-width of track bed / rail search corridor (m)", 0.4, 2.0, 0.05));
+    make_float_desc("Half-width of track bed / rail search corridor (m)"));
   this->declare_parameter("clearance_corridor_half_width", 1.75,
-    make_float_desc("Half-width of train clearance corridor GOST 9238 (m)", 1.0, 3.0, 0.05));
+    make_float_desc("Half-width of train clearance corridor GOST 9238 (m)"));
   this->declare_parameter("single_tunnel_radius", 2.15,
-    make_float_desc("Nominal single track tunnel half-width (m)", 1.5, 4.0, 0.05));
+    make_float_desc("Nominal single track tunnel half-width (m)"));
   this->declare_parameter("min_curve_radius", 160.0,
-    make_float_desc("Minimum track curve radius limit SP 120.13330 (m)", 50.0, 1000.0, 10.0));
+    make_float_desc("Minimum track curve radius limit SP 120.13330 (m)"));
   this->declare_parameter("max_grade_slope", 0.035,
-    make_float_desc("Maximum longitudinal grade slope PTE (3.5% = 0.035)", 0.005, 0.10, 0.005));
+    make_float_desc("Maximum longitudinal grade slope PTE (3.5% = 0.035)"));
   this->declare_parameter("default_rail_z", -1.35,
-    make_float_desc("Nominal rail head Z level in sensor frame (m)", -3.0, 0.0, 0.05));
+    make_float_desc("Nominal rail head Z level in sensor frame (m)"));
   this->declare_parameter("gauge", 1.520,
-    make_float_desc("Russian railway gauge (1520 mm)", 1.0, 2.0, 0.001));
+    make_float_desc("Russian railway gauge (1520 mm)"));
+  this->declare_parameter("max_heading_slope", 0.45,
+    make_float_desc("Maximum tangent of track yaw heading angle"));
   this->declare_parameter("temporal_alpha", 0.50,
-    make_float_desc("EMA temporal smoothing factor across frames (0.0 - 1.0)", 0.0, 1.0, 0.05));
+    make_float_desc("EMA temporal smoothing factor across frames (0.0 - 1.0)"));
+
+  // Параметры поиска рельсов и УГР:
+  this->declare_parameter("rail_search_tolerance", 0.16,
+    make_float_desc("Half-width search tolerance around rail head (m)"));
+  this->declare_parameter("rail_z_min_offset", -0.35,
+    make_float_desc("Lower Z search window offset relative to pred_z (m)"));
+  this->declare_parameter("rail_z_max_offset", 0.30,
+    make_float_desc("Upper Z search window offset relative to pred_z (m)"));
+  this->declare_parameter("rail_head_quantile", 0.85,
+    make_float_desc("Quantile for rail head height detection (0.0 - 1.0)"));
+  this->declare_parameter("track_bed_quantile", 0.85,
+    make_float_desc("Quantile for track bed height detection (0.0 - 1.0)"));
+  this->declare_parameter("rail_height_over_bed", 0.16,
+    make_float_desc("Structural height of rail head above track bed (m)"));
+  this->declare_parameter("min_rail_points", 3,
+    rcl_interfaces::msg::ParameterDescriptor{});
+
+  // Параметры поиска стен и габаритов тоннеля:
+  this->declare_parameter("wall_search_min_dist", 1.25,
+    make_float_desc("Minimum lateral distance from centerline to tunnel wall (m)"));
+  this->declare_parameter("wall_search_max_dist", 4.20,
+    make_float_desc("Maximum lateral distance from centerline to tunnel wall (m)"));
+  this->declare_parameter("wall_z_min", 0.35,
+    make_float_desc("Lower Z boundary above rail head for wall detection (m)"));
+  this->declare_parameter("wall_z_max", 3.80,
+    make_float_desc("Upper Z boundary above rail head for wall detection (m)"));
+  this->declare_parameter("left_wall_quantile", 0.90,
+    make_float_desc("Quantile for inner surface of left wall (0.0 - 1.0)"));
+  this->declare_parameter("right_wall_quantile", 0.10,
+    make_float_desc("Quantile for inner surface of right wall (0.0 - 1.0)"));
+  this->declare_parameter("min_wall_points_near", 4,
+    rcl_interfaces::msg::ParameterDescriptor{});
+  this->declare_parameter("min_wall_points_far", 3,
+    rcl_interfaces::msg::ParameterDescriptor{});
+  this->declare_parameter("wall_near_threshold", 45.0,
+    make_float_desc("Distance threshold for wall point count requirements (m)"));
+  this->declare_parameter("symmetric_tunnel_min_width", 3.0,
+    make_float_desc("Minimum width of symmetric single tunnel (m)"));
+  this->declare_parameter("symmetric_tunnel_max_width", 5.4,
+    make_float_desc("Maximum width of symmetric single tunnel (m)"));
+  this->declare_parameter("symmetric_tunnel_wall_tolerance", 1.2,
+    make_float_desc("Maximum wall asymmetry tolerance for centering (m)"));
+  this->declare_parameter("wall_tracking_error_tolerance", 0.70,
+    make_float_desc("Error tolerance for anchoring to continuous wall (m)"));
+  this->declare_parameter("single_wall_tolerance", 0.85,
+    make_float_desc("Error tolerance for single-wall curve tracking (m)"));
+  this->declare_parameter("max_lateral_offset", 12.0,
+    make_float_desc("Maximum raw point lateral offset from sensor axis (m)"));
 
   // Параметры 3D-габарита вагона и зоны контроля свободности (ГОСТ 9238):
   this->declare_parameter<std::string>("clearance_envelope_topic", "/metro/clearance_envelope");
   this->declare_parameter("rail_head_clearance", 0.15,
-    make_float_desc("Vertical clearance above rail head (m)", 0.05, 0.50, 0.01));
+    make_float_desc("Vertical clearance above rail head (m)"));
   this->declare_parameter("undercarriage_half_width", 1.15,
-    make_float_desc("Undercarriage half-width inside third rail zone (m)", 0.8, 1.5, 0.05));
+    make_float_desc("Undercarriage half-width inside third rail zone (m)"));
   this->declare_parameter("contact_rail_height", 0.60,
-    make_float_desc("Upper boundary of third rail zone above rail head (m)", 0.2, 1.0, 0.05));
+    make_float_desc("Upper boundary of third rail zone above rail head (m)"));
   this->declare_parameter("platform_clearance_half_width", 1.33,
-    make_float_desc("Car body half-width at high platform level (m)", 1.0, 1.6, 0.01));
+    make_float_desc("Car body half-width at high platform level (m)"));
   this->declare_parameter("platform_height", 1.25,
-    make_float_desc("High station platform height above rail head (m)", 0.8, 1.6, 0.05));
+    make_float_desc("High station platform height above rail head (m)"));
   this->declare_parameter("waist_half_width", 1.37,
-    make_float_desc("Car body half-width above platform level (m)", 1.0, 1.8, 0.01));
+    make_float_desc("Car body half-width above platform level (m)"));
   this->declare_parameter("carriage_wall_height", 2.60,
-    make_float_desc("Car body vertical side wall height above rail head (m)", 1.5, 3.5, 0.05));
+    make_float_desc("Car body vertical side wall height above rail head (m)"));
   this->declare_parameter("roof_half_width", 0.85,
-    make_float_desc("Roof dome top half-width (m)", 0.5, 1.5, 0.05));
+    make_float_desc("Roof dome top half-width (m)"));
   this->declare_parameter("carriage_height", 3.60,
-    make_float_desc("Total car height above rail head GOST 9238 (m)", 2.5, 4.5, 0.05));
+    make_float_desc("Total car height above rail head GOST 9238 (m)"));
   this->declare_parameter("envelope_alpha", 0.18,
-    make_float_desc("Clearance envelope mesh transparency in Foxglove (0.0 - 1.0)", 0.0, 1.0, 0.02));
+    make_float_desc("Clearance envelope mesh transparency in Foxglove (0.0 - 1.0)"));
 
   lidar_topic_ = this->get_parameter("lidar_topic").as_string();
   target_frame_ = this->get_parameter("target_frame").as_string();
@@ -80,6 +131,9 @@ TunnelTrackerNode::TunnelTrackerNode(const rclcpp::NodeOptions & options)
   config_.lookahead_distance = static_cast<float>(this->get_parameter("lookahead_distance").as_double());
   config_.min_distance = static_cast<float>(this->get_parameter("min_distance").as_double());
   config_.slice_step = static_cast<float>(this->get_parameter("slice_step").as_double());
+  config_.zone1_start = static_cast<float>(this->get_parameter("zone1_start").as_double());
+  config_.zone2_start = static_cast<float>(this->get_parameter("zone2_start").as_double());
+  config_.curvature_freeze_dist = static_cast<float>(this->get_parameter("curvature_freeze_dist").as_double());
   config_.track_corridor_half_width = static_cast<float>(this->get_parameter("track_corridor_half_width").as_double());
   config_.clearance_corridor_half_width = static_cast<float>(this->get_parameter("clearance_corridor_half_width").as_double());
   config_.single_tunnel_radius = static_cast<float>(this->get_parameter("single_tunnel_radius").as_double());
@@ -87,6 +141,29 @@ TunnelTrackerNode::TunnelTrackerNode(const rclcpp::NodeOptions & options)
   config_.max_grade_slope = static_cast<float>(this->get_parameter("max_grade_slope").as_double());
   config_.default_rail_z = static_cast<float>(this->get_parameter("default_rail_z").as_double());
   config_.gauge = static_cast<float>(this->get_parameter("gauge").as_double());
+  config_.max_heading_slope = static_cast<float>(this->get_parameter("max_heading_slope").as_double());
+  config_.rail_search_tolerance = static_cast<float>(this->get_parameter("rail_search_tolerance").as_double());
+  config_.rail_z_min_offset = static_cast<float>(this->get_parameter("rail_z_min_offset").as_double());
+  config_.rail_z_max_offset = static_cast<float>(this->get_parameter("rail_z_max_offset").as_double());
+  config_.rail_head_quantile = static_cast<float>(this->get_parameter("rail_head_quantile").as_double());
+  config_.track_bed_quantile = static_cast<float>(this->get_parameter("track_bed_quantile").as_double());
+  config_.rail_height_over_bed = static_cast<float>(this->get_parameter("rail_height_over_bed").as_double());
+  config_.min_rail_points = static_cast<int>(this->get_parameter("min_rail_points").as_int());
+  config_.wall_search_min_dist = static_cast<float>(this->get_parameter("wall_search_min_dist").as_double());
+  config_.wall_search_max_dist = static_cast<float>(this->get_parameter("wall_search_max_dist").as_double());
+  config_.wall_z_min = static_cast<float>(this->get_parameter("wall_z_min").as_double());
+  config_.wall_z_max = static_cast<float>(this->get_parameter("wall_z_max").as_double());
+  config_.left_wall_quantile = static_cast<float>(this->get_parameter("left_wall_quantile").as_double());
+  config_.right_wall_quantile = static_cast<float>(this->get_parameter("right_wall_quantile").as_double());
+  config_.min_wall_points_near = static_cast<int>(this->get_parameter("min_wall_points_near").as_int());
+  config_.min_wall_points_far = static_cast<int>(this->get_parameter("min_wall_points_far").as_int());
+  config_.wall_near_threshold = static_cast<float>(this->get_parameter("wall_near_threshold").as_double());
+  config_.symmetric_tunnel_min_width = static_cast<float>(this->get_parameter("symmetric_tunnel_min_width").as_double());
+  config_.symmetric_tunnel_max_width = static_cast<float>(this->get_parameter("symmetric_tunnel_max_width").as_double());
+  config_.symmetric_tunnel_wall_tolerance = static_cast<float>(this->get_parameter("symmetric_tunnel_wall_tolerance").as_double());
+  config_.wall_tracking_error_tolerance = static_cast<float>(this->get_parameter("wall_tracking_error_tolerance").as_double());
+  config_.single_wall_tolerance = static_cast<float>(this->get_parameter("single_wall_tolerance").as_double());
+  config_.max_lateral_offset = static_cast<float>(this->get_parameter("max_lateral_offset").as_double());
   temporal_alpha_ = static_cast<float>(this->get_parameter("temporal_alpha").as_double());
 
   clearance_envelope_topic_ = this->get_parameter("clearance_envelope_topic").as_string();
@@ -225,7 +302,7 @@ void TunnelTrackerNode::pointcloud_callback(const sensor_msgs::msg::PointCloud2:
     if (std::isnan(x) || std::isnan(y) || std::isnan(z)) {
       continue;
     }
-    if (y > 0.5f || y < -config_.lookahead_distance - 5.0f || std::abs(x) > 8.0f) {
+    if (y > 0.5f || y < -config_.lookahead_distance - 12.0f || std::abs(x) > config_.max_lateral_offset) {
       continue;
     }
 
@@ -251,13 +328,19 @@ void TunnelTrackerNode::pointcloud_callback(const sensor_msgs::msg::PointCloud2:
 
   for (size_t i = 0; i < trajectory.size(); ++i) {
     float next_x = trajectory[i].x;
-    float next_y = trajectory[i].y - config_.slice_step;
+    float next_y = trajectory[i].y;
     float next_z = trajectory[i].z_rail;
 
     if (i + 1 < trajectory.size()) {
       next_x = trajectory[i + 1].x;
       next_y = trajectory[i + 1].y;
       next_z = trajectory[i + 1].z_rail;
+    } else if (i > 0) {
+      next_x = trajectory[i].x + (trajectory[i].x - trajectory[i - 1].x);
+      next_y = trajectory[i].y + (trajectory[i].y - trajectory[i - 1].y);
+      next_z = trajectory[i].z_rail + (trajectory[i].z_rail - trajectory[i - 1].z_rail);
+    } else {
+      next_y = trajectory[i].y - config_.slice_step;
     }
 
     const float delta_x = next_x - trajectory[i].x;
@@ -345,7 +428,30 @@ void TunnelTrackerNode::pointcloud_callback(const sensor_msgs::msg::PointCloud2:
 
   const float half_gauge = 0.5f * config_.gauge;
 
-  for (const auto & wp : trajectory) {
+  for (size_t i = 0; i < trajectory.size(); ++i) {
+    const auto & wp = trajectory[i];
+
+    // Compute normal vector (nx, ny) perpendicular to track tangent at waypoint
+    float nx = std::cos(wp.yaw);
+    float ny = std::sin(wp.yaw);
+    if (i + 1 < trajectory.size()) {
+      float dx = trajectory[i + 1].x - wp.x;
+      float dy = trajectory[i + 1].y - wp.y;
+      float norm = std::hypot(dx, dy);
+      if (norm > 1e-4f) {
+        nx = -dy / norm;
+        ny = dx / norm;
+      }
+    } else if (i > 0) {
+      float dx = wp.x - trajectory[i - 1].x;
+      float dy = wp.y - trajectory[i - 1].y;
+      float norm = std::hypot(dx, dy);
+      if (norm > 1e-4f) {
+        nx = -dy / norm;
+        ny = dx / norm;
+      }
+    }
+
     geometry_msgs::msg::Point p_c;
     p_c.x = wp.x;
     p_c.y = wp.y;
@@ -353,33 +459,142 @@ void TunnelTrackerNode::pointcloud_callback(const sensor_msgs::msg::PointCloud2:
     center_line.points.push_back(p_c);
 
     geometry_msgs::msg::Point p_l;
-    p_l.x = wp.x - half_gauge;
-    p_l.y = wp.y;
+    p_l.x = wp.x - half_gauge * nx;
+    p_l.y = wp.y - half_gauge * ny;
     p_l.z = wp.z_rail;
     left_rail.points.push_back(p_l);
 
     geometry_msgs::msg::Point p_r;
-    p_r.x = wp.x + half_gauge;
-    p_r.y = wp.y;
+    p_r.x = wp.x + half_gauge * nx;
+    p_r.y = wp.y + half_gauge * ny;
     p_r.z = wp.z_rail;
     right_rail.points.push_back(p_r);
 
+    // Cross-sectional slice boundary line (strictly perpendicular to track trajectory)
+    float dist_l = std::abs(wp.left_boundary - wp.x);
+    float dist_r = std::abs(wp.right_boundary - wp.x);
+    if (dist_l < 1.0f) dist_l = config_.clearance_corridor_half_width;
+    if (dist_r < 1.0f) dist_r = config_.clearance_corridor_half_width;
+
     geometry_msgs::msg::Point b_l;
-    b_l.x = wp.left_boundary;
-    b_l.y = wp.y;
+    b_l.x = wp.x - dist_l * nx;
+    b_l.y = wp.y - dist_l * ny;
     b_l.z = wp.z_rail + 1.0f;
+
     geometry_msgs::msg::Point b_r;
-    b_r.x = wp.right_boundary;
-    b_r.y = wp.y;
+    b_r.x = wp.x + dist_r * nx;
+    b_r.y = wp.y + dist_r * ny;
     b_r.z = wp.z_rail + 1.0f;
+
     tunnel_bounds.points.push_back(b_l);
     tunnel_bounds.points.push_back(b_r);
+  }
+
+  // 1. Прямоугольные рамки сечений (габариты срезов по высоте и ширине поиска стен/свода)
+  visualization_msgs::msg::Marker slice_boxes;
+  slice_boxes.header = path_msg.header;
+  slice_boxes.ns = "slice_search_windows";
+  slice_boxes.id = 4;
+  slice_boxes.type = visualization_msgs::msg::Marker::LINE_LIST;
+  slice_boxes.action = visualization_msgs::msg::Marker::ADD;
+  slice_boxes.scale.x = 0.025; // толщина линии рамки
+  slice_boxes.color.r = 0.0f;
+  slice_boxes.color.g = 0.75f;
+  slice_boxes.color.b = 1.0f;
+  slice_boxes.color.a = 0.40f;
+
+  for (size_t i = 0; i < trajectory.size(); ++i) {
+    // Отображаем сечение через срез или на ключевых точках
+    if (i % 2 != 0 && i != trajectory.size() - 1) {
+      continue;
+    }
+    const auto & wp = trajectory[i];
+    float nx = std::cos(wp.yaw);
+    float ny = std::sin(wp.yaw);
+    if (i + 1 < trajectory.size()) {
+      float dx = trajectory[i + 1].x - wp.x;
+      float dy = trajectory[i + 1].y - wp.y;
+      float norm = std::hypot(dx, dy);
+      if (norm > 1e-4f) { nx = -dy / norm; ny = dx / norm; }
+    } else if (i > 0) {
+      float dx = wp.x - trajectory[i - 1].x;
+      float dy = wp.y - trajectory[i - 1].y;
+      float norm = std::hypot(dx, dy);
+      if (norm > 1e-4f) { nx = -dy / norm; ny = dx / norm; }
+    }
+
+    float dist_l = std::abs(wp.left_boundary - wp.x);
+    float dist_r = std::abs(wp.right_boundary - wp.x);
+    if (dist_l < 1.0f) dist_l = config_.clearance_corridor_half_width;
+    if (dist_r < 1.0f) dist_r = config_.clearance_corridor_half_width;
+
+    const float z_bottom = wp.z_rail + config_.rail_z_min_offset;
+    const float z_top = wp.z_rail + std::max(2.5f, wp.ceiling_z);
+
+    geometry_msgs::msg::Point p_bl, p_br, p_tl, p_tr;
+    p_bl.x = wp.x - dist_l * nx; p_bl.y = wp.y - dist_l * ny; p_bl.z = z_bottom;
+    p_br.x = wp.x + dist_r * nx; p_br.y = wp.y + dist_r * ny; p_br.z = z_bottom;
+    p_tl.x = wp.x - dist_l * nx; p_tl.y = wp.y - dist_l * ny; p_tl.z = z_top;
+    p_tr.x = wp.x + dist_r * nx; p_tr.y = wp.y + dist_r * ny; p_tr.z = z_top;
+
+    // Нижняя грань
+    slice_boxes.points.push_back(p_bl); slice_boxes.points.push_back(p_br);
+    // Верхняя грань (потолок)
+    slice_boxes.points.push_back(p_tl); slice_boxes.points.push_back(p_tr);
+    // Левая стойка
+    slice_boxes.points.push_back(p_bl); slice_boxes.points.push_back(p_tl);
+    // Правая стойка
+    slice_boxes.points.push_back(p_br); slice_boxes.points.push_back(p_tr);
+  }
+
+  // 2. Информационные 3D-метки с параметрами следования вдоль пути
+  std::vector<visualization_msgs::msg::Marker> text_markers;
+  for (size_t i = 0; i < trajectory.size(); ++i) {
+    // Выводим метки каждые ~15-20 метров и в конце траектории
+    if (i % 6 != 0 && i != trajectory.size() - 1 && i != 0) {
+      continue;
+    }
+    const auto & wp = trajectory[i];
+    visualization_msgs::msg::Marker txt;
+    txt.header = path_msg.header;
+    txt.ns = "slice_diagnostics";
+    txt.id = static_cast<int>(100 + i);
+    txt.type = visualization_msgs::msg::Marker::TEXT_VIEW_FACING;
+    txt.action = visualization_msgs::msg::Marker::ADD;
+    txt.pose.position.x = wp.x;
+    txt.pose.position.y = wp.y;
+    txt.pose.position.z = wp.z_rail + 1.85f;
+    txt.scale.z = 0.45; // Высота шрифта (м)
+
+    // Индикация цвета: зеленый при высокой надежности, желто-оранжевый при дальней/меньшей надежности
+    if (wp.confidence > 0.6f) {
+      txt.color.r = 0.2f; txt.color.g = 1.0f; txt.color.b = 0.4f; txt.color.a = 0.95f;
+    } else {
+      txt.color.r = 1.0f; txt.color.g = 0.85f; txt.color.b = 0.1f; txt.color.a = 0.90f;
+    }
+
+    const float dist = std::hypot(wp.x, wp.y);
+    const float radius = (std::abs(wp.curvature) > 1e-4f) ? (1.0f / std::abs(wp.curvature)) : 9999.0f;
+    char buf[128];
+    std::snprintf(buf, sizeof(buf),
+      "[%.0fm] Conf:%.0f%% | W:%.2fm | R:%.0fm | %s%s",
+      dist, wp.confidence * 100.0f,
+      (std::abs(wp.right_boundary - wp.x) + std::abs(wp.left_boundary - wp.x)),
+      radius,
+      (wp.has_left_wall ? "L" : "-"),
+      (wp.has_right_wall ? "R" : "-"));
+    txt.text = buf;
+    text_markers.push_back(txt);
   }
 
   marker_array.markers.push_back(center_line);
   marker_array.markers.push_back(left_rail);
   marker_array.markers.push_back(right_rail);
   marker_array.markers.push_back(tunnel_bounds);
+  marker_array.markers.push_back(slice_boxes);
+  for (auto & tm : text_markers) {
+    marker_array.markers.push_back(tm);
+  }
 
   pub_markers_->publish(marker_array);
 
@@ -389,20 +604,33 @@ void TunnelTrackerNode::pointcloud_callback(const sensor_msgs::msg::PointCloud2:
   const auto end_time = std::chrono::steady_clock::now();
   const auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time).count();
 
+  std::string track_summary = "";
+  if (!trajectory.empty()) {
+    const auto & wp_mid = trajectory[trajectory.size() / 2];
+    const auto & wp_far = trajectory.back();
+    char summary_buf[256];
+    std::snprintf(summary_buf, sizeof(summary_buf),
+      " | Mid[%.0fm]: X=%.2fm, R=%.0fm | Far[%.0fm]: X=%.2fm, Conf=%.0f%%",
+      std::hypot(wp_mid.x, wp_mid.y), wp_mid.x,
+      (std::abs(wp_mid.curvature) > 1e-4f ? 1.0f / std::abs(wp_mid.curvature) : 9999.0f),
+      std::hypot(wp_far.x, wp_far.y), wp_far.x, wp_far.confidence * 100.0f);
+    track_summary = summary_buf;
+  }
+
   if (frame_count_ <= 3) {
     RCLCPP_INFO(
       this->get_logger(),
-      "[TrackTracker] Frame #%zu | Points: %zu | Poses: %zu (%lld ms) | Rail Z: %.2f m | Path & Envelope -> /metro",
+      "[TrackTracker] Frame #%zu | Points: %zu | Poses: %zu (%lld ms) | Rail Z: %.2f m%s",
       frame_count_, points_scratch_buf_.size(), trajectory.size(),
       static_cast<long long>(elapsed_ms),
-      trajectory.empty() ? 0.0f : trajectory.front().z_rail);
+      trajectory.empty() ? 0.0f : trajectory.front().z_rail,
+      track_summary.c_str());
   } else {
     RCLCPP_INFO_THROTTLE(
       this->get_logger(), *this->get_clock(), 500,
-      "[TrackTracker] Frame #%zu | Points: %zu | Poses: %zu (%lld ms) | Rail Z: %.2f m | Path & Envelope -> /metro",
+      "[TrackTracker] Frame #%zu | Points: %zu | Poses: %zu (%lld ms)%s",
       frame_count_, points_scratch_buf_.size(), trajectory.size(),
-      static_cast<long long>(elapsed_ms),
-      trajectory.empty() ? 0.0f : trajectory.front().z_rail);
+      static_cast<long long>(elapsed_ms), track_summary.c_str());
   }
 }
 
@@ -603,8 +831,104 @@ rcl_interfaces::msg::SetParametersResult TunnelTrackerNode::on_parameters_set(
     } else if (name == "slice_step") {
       config_.slice_step = static_cast<float>(param.as_double());
       tracker_config_changed = true;
+    } else if (name == "zone1_start") {
+      config_.zone1_start = static_cast<float>(param.as_double());
+      tracker_config_changed = true;
+    } else if (name == "zone2_start") {
+      config_.zone2_start = static_cast<float>(param.as_double());
+      tracker_config_changed = true;
+    } else if (name == "curvature_freeze_dist") {
+      config_.curvature_freeze_dist = static_cast<float>(param.as_double());
+      tracker_config_changed = true;
+    } else if (name == "track_corridor_half_width") {
+      config_.track_corridor_half_width = static_cast<float>(param.as_double());
+      tracker_config_changed = true;
+    } else if (name == "clearance_corridor_half_width") {
+      config_.clearance_corridor_half_width = static_cast<float>(param.as_double());
+      tracker_config_changed = true;
+    } else if (name == "single_tunnel_radius") {
+      config_.single_tunnel_radius = static_cast<float>(param.as_double());
+      tracker_config_changed = true;
     } else if (name == "min_curve_radius") {
       config_.min_curve_radius = static_cast<float>(param.as_double());
+      tracker_config_changed = true;
+    } else if (name == "max_grade_slope") {
+      config_.max_grade_slope = static_cast<float>(param.as_double());
+      tracker_config_changed = true;
+    } else if (name == "default_rail_z") {
+      config_.default_rail_z = static_cast<float>(param.as_double());
+      tracker_config_changed = true;
+    } else if (name == "gauge") {
+      config_.gauge = static_cast<float>(param.as_double());
+      tracker_config_changed = true;
+    } else if (name == "max_heading_slope") {
+      config_.max_heading_slope = static_cast<float>(param.as_double());
+      tracker_config_changed = true;
+    } else if (name == "rail_search_tolerance") {
+      config_.rail_search_tolerance = static_cast<float>(param.as_double());
+      tracker_config_changed = true;
+    } else if (name == "rail_z_min_offset") {
+      config_.rail_z_min_offset = static_cast<float>(param.as_double());
+      tracker_config_changed = true;
+    } else if (name == "rail_z_max_offset") {
+      config_.rail_z_max_offset = static_cast<float>(param.as_double());
+      tracker_config_changed = true;
+    } else if (name == "rail_head_quantile") {
+      config_.rail_head_quantile = static_cast<float>(param.as_double());
+      tracker_config_changed = true;
+    } else if (name == "track_bed_quantile") {
+      config_.track_bed_quantile = static_cast<float>(param.as_double());
+      tracker_config_changed = true;
+    } else if (name == "rail_height_over_bed") {
+      config_.rail_height_over_bed = static_cast<float>(param.as_double());
+      tracker_config_changed = true;
+    } else if (name == "min_rail_points") {
+      config_.min_rail_points = static_cast<int>(param.as_int());
+      tracker_config_changed = true;
+    } else if (name == "wall_search_min_dist") {
+      config_.wall_search_min_dist = static_cast<float>(param.as_double());
+      tracker_config_changed = true;
+    } else if (name == "wall_search_max_dist") {
+      config_.wall_search_max_dist = static_cast<float>(param.as_double());
+      tracker_config_changed = true;
+    } else if (name == "wall_z_min") {
+      config_.wall_z_min = static_cast<float>(param.as_double());
+      tracker_config_changed = true;
+    } else if (name == "wall_z_max") {
+      config_.wall_z_max = static_cast<float>(param.as_double());
+      tracker_config_changed = true;
+    } else if (name == "left_wall_quantile") {
+      config_.left_wall_quantile = static_cast<float>(param.as_double());
+      tracker_config_changed = true;
+    } else if (name == "right_wall_quantile") {
+      config_.right_wall_quantile = static_cast<float>(param.as_double());
+      tracker_config_changed = true;
+    } else if (name == "min_wall_points_near") {
+      config_.min_wall_points_near = static_cast<int>(param.as_int());
+      tracker_config_changed = true;
+    } else if (name == "min_wall_points_far") {
+      config_.min_wall_points_far = static_cast<int>(param.as_int());
+      tracker_config_changed = true;
+    } else if (name == "wall_near_threshold") {
+      config_.wall_near_threshold = static_cast<float>(param.as_double());
+      tracker_config_changed = true;
+    } else if (name == "symmetric_tunnel_min_width") {
+      config_.symmetric_tunnel_min_width = static_cast<float>(param.as_double());
+      tracker_config_changed = true;
+    } else if (name == "symmetric_tunnel_max_width") {
+      config_.symmetric_tunnel_max_width = static_cast<float>(param.as_double());
+      tracker_config_changed = true;
+    } else if (name == "symmetric_tunnel_wall_tolerance") {
+      config_.symmetric_tunnel_wall_tolerance = static_cast<float>(param.as_double());
+      tracker_config_changed = true;
+    } else if (name == "wall_tracking_error_tolerance") {
+      config_.wall_tracking_error_tolerance = static_cast<float>(param.as_double());
+      tracker_config_changed = true;
+    } else if (name == "single_wall_tolerance") {
+      config_.single_wall_tolerance = static_cast<float>(param.as_double());
+      tracker_config_changed = true;
+    } else if (name == "max_lateral_offset") {
+      config_.max_lateral_offset = static_cast<float>(param.as_double());
       tracker_config_changed = true;
     } else if (name == "temporal_alpha") {
       temporal_alpha_ = static_cast<float>(param.as_double());
@@ -612,6 +936,20 @@ rcl_interfaces::msg::SetParametersResult TunnelTrackerNode::on_parameters_set(
       envelope_alpha_ = static_cast<float>(param.as_double());
     } else if (name == "rail_head_clearance") {
       rail_head_clearance_ = static_cast<float>(param.as_double());
+    } else if (name == "undercarriage_half_width") {
+      undercarriage_half_width_ = static_cast<float>(param.as_double());
+    } else if (name == "contact_rail_height") {
+      contact_rail_height_ = static_cast<float>(param.as_double());
+    } else if (name == "platform_clearance_half_width") {
+      platform_clearance_half_width_ = static_cast<float>(param.as_double());
+    } else if (name == "platform_height") {
+      platform_height_ = static_cast<float>(param.as_double());
+    } else if (name == "waist_half_width") {
+      waist_half_width_ = static_cast<float>(param.as_double());
+    } else if (name == "carriage_wall_height") {
+      carriage_wall_height_ = static_cast<float>(param.as_double());
+    } else if (name == "roof_half_width") {
+      roof_half_width_ = static_cast<float>(param.as_double());
     } else if (name == "carriage_height") {
       carriage_height_ = static_cast<float>(param.as_double());
     }
