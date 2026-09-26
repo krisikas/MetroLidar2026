@@ -58,23 +58,30 @@ MetroLidar2026/
 ├── foxglove/
 │   └── metro_layout.json                     # Конфиг 3D панели Foxglove Studio
 ├── scripts/
-│   └── verify_trajectory.py                  # Оффлайн верификатор траектории на сырых бэгах
+│   ├── verify_trajectory.py                  # Оффлайн верификатор траектории на сырых бэгах
+│   └── verify_voxel_tracker.py               # Оффлайн верификатор воксельного трекера и препятствий
 └── src/
-    └── metro_tunnel_tracker/
+    ├── metro_tunnel_tracker/                 # Базовый геометрический пакет (слайсинг сырых точек)
+    └── metro_voxel_tunnel_tracker/           # Новый пакет: вокселизация 3D-пространства, детекция препятствий
         ├── CMakeLists.txt                    # Сборка пакета (линкует Python3::Python для macOS)
         ├── package.xml                       # Стандартные зависимости ROS 2
         ├── config/
-        │   └── params.yaml                   # Дефолтные параметры алгоритма
+        │   └── params.yaml                   # Параметры вокселизации и трекера
         ├── launch/
-        │   └── tunnel_tracker.launch.py      # Запуск ноды + foxglove_bridge (порт 8765)
-        ├── include/metro_tunnel_tracker/
-        │   ├── types.hpp                     # Структуры Point3D, TrackPoint, LongitudinalSlice
-        │   ├── rail_geometry_tracker.hpp     # Интерфейс геометрического калькулятора пути
-        │   └── tunnel_tracker_node.hpp       # ROS 2 компонент ноды
-        └── src/
-            ├── rail_geometry_tracker.cpp     # Ядро трекинга: слайсинг, УГР, удержание колеи
-            ├── tunnel_tracker_node.cpp       # ROS 2 логика, memcpy-парсинг, маркеры колеи 1520мм
-            └── main.cpp                      # Точка входа для отдельного бинарника
+        │   └── voxel_tunnel_tracker.launch.py# Запуск воксельной ноды + foxglove_bridge
+        ├── include/metro_voxel_tunnel_tracker/
+        │   ├── types.hpp                     # Структуры Point3D, Voxel, TrackWaypoint, ObstacleCluster
+        │   ├── voxel_grid.hpp                # Разреженная 3D-хэш сетка и запросы срезов Френе
+        │   ├── voxel_tunnel_tracker.hpp      # Алгоритмическое ядро: профилирование высот, УГР, стены
+        │   └── voxel_tunnel_tracker_node.hpp # ROS 2 нода, публикация пути, маркеров, препятствий и вокселей
+        ├── src/
+        │   ├── voxel_grid.cpp                # Вокселизация, расчет центроидов, пространственный поиск
+        │   ├── voxel_tunnel_tracker.cpp      # Трекинг пути и кластеризация препятствий
+        │   ├── voxel_tunnel_tracker_node.cpp # Прием PointCloud2, публикация маркеров и воксельного облака
+        │   └── main.cpp                      # Точка входа для бинарника
+        └── test/
+            ├── test_voxel_grid.cpp           # Юнит-тесты воксельной сетки
+            └── test_voxel_tracker.cpp        # Юнит-тесты трекинга и детекции препятствий
 ```
 
 ### Как работает алгоритм трекинга пути (`rail_geometry_tracker.cpp`):
@@ -95,31 +102,56 @@ MetroLidar2026/
    * `/metro/track_markers` (`visualization_msgs/msg/MarkerArray`) — центральная ось, обе рельсовые нити русской колеи 1520 мм и боковые габаритные границы тоннеля.
    * `/metro/clearance_envelope` (`visualization_msgs/msg/MarkerArray`) — 3D полупрозрачный объемный силуэт вагона и габарит свободности пути (габарит подвижного состава ГОСТ 9238: ширина 3.20 м, высота от УГР 3.60 м, сетка ребер и лобовой силуэт кабины).
 
+### Особенности нового воксельного пакета (`metro_voxel_tunnel_tracker`):
+* **Анизотропная воксельная сетка:** $dx = 0.10$ м (латеральная резкость), $dy = 0.20$ м (продольный шаг), $dz = 0.05$ м (5-сантиметровая дискретизация по высоте для идеального разделения УГР, шпал и дна лотка).
+* **Сжатие данных на 90–95%:** 300k–450k сырых точек упаковываются в 20k–30k регулярных вокселей, полностью устраняя локальные артефакты от кабелей и бликов.
+* **Shape-Agnostic анализ:** алгоритм не навязывает цилиндрическую или прямоугольную форму — он универсально отслеживает ходовое полотно и боковые границы свободного объема для любых типов тоннелей (круглых, прямоугольных, платформ, стрелок).
+* **Контроль габарита ГОСТ 9238 и детекция препятствий:** воксели проверяются на пересечение с кинематическим контуром подвижного состава, кластеризуются в 3D bounding boxes и публикуются в `/metro/obstacles`.
+* **Визуализация воксельной сетки:** воксельное облако публикуется в `/metro/voxel_grid` для инспекции в Foxglove.
 
 ---
 
 ## 4. Запуск и визуализация
 
-### Сборка:
+### Сборка пакетов (выполняется в терминале с активированным ros_humble_env):
 ```bash
 cd /Users/krisik/Documents/MetroLidar2026
-colcon build --packages-select metro_tunnel_tracker --symlink-install
+
+# Сборка нового воксельного пакета:
+colcon build --packages-select metro_voxel_tunnel_tracker --symlink-install
+
+# Или сборка обоих пакетов:
+colcon build --packages-select metro_tunnel_tracker metro_voxel_tunnel_tracker --symlink-install
+
 source install/setup.zsh
 ```
 
-### Запуск ноды и Foxglove Bridge:
+### Запуск воксельной ноды и Foxglove Bridge:
 ```bash
-ros2 launch metro_tunnel_tracker tunnel_tracker.launch.py lidar_topic:=/lidar_points
+ros2 launch metro_voxel_tunnel_tracker voxel_tunnel_tracker.launch.py lidar_topic:=/lidar_points
+# Для бэга с препятствием (doubleT_obstacle):
+ros2 launch metro_voxel_tunnel_tracker voxel_tunnel_tracker.launch.py lidar_topic:=/sensing/lidar/hesai128/pointcloud
+```
+
+### Запуск оффлайн математической верификации на всех 6 росбагах:
+```bash
+python3 scripts/verify_voxel_tracker.py
 ```
 
 ### Запуск проигрывания данных:
 ```bash
-ros2 bag play archive/for_hackathon/doubleT_platform -l
+ros2 bag play archive/for_hackathon/doubleT_obstacle -l
 ```
 
 ### Foxglove Studio:
 1. Подключение: **Foxglove WebSocket** $\to$ `ws://localhost:8765`.
 2. Загрузить лейаут: `Layout` $\to$ `Import from file...` $\to$ `foxglove/metro_layout.json`.
+3. Добавить в 3D-панель топики:
+   * `/metro/track_path`
+   * `/metro/track_markers`
+   * `/metro/clearance_envelope`
+   * `/metro/obstacles` (3D кубы препятствий и метки дистанции)
+   * `/metro/voxel_grid` (вокселизированное пространство)
 
 ---
 

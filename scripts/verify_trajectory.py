@@ -37,75 +37,78 @@ def parse_points(db_path, max_frames=1):
     return frames
 
 def run_tracker(points, lookahead=180.0, min_dist=2.5, slice_step=2.2, zone1=35.5, zone2=79.5):
-    # Construct Range-Adaptive Slices:
-    # Zone 0: [2.5 .. 35.5] with step 2.2 m
-    # Zone 1: [35.5 .. 79.5] with step 4.4 m
-    # Zone 2: [79.5 .. 180.0] with step 8.8 m
-    slice_dy = []
-    slice_y_centers = []
-    d = min_dist
-    while d < lookahead:
-        step = slice_step
-        if d >= zone2:
-            step = slice_step * 4.0
-        elif d >= zone1:
-            step = slice_step * 2.0
-        
-        next_d = min(d + step, lookahead)
-        actual_step = next_d - d
-        if actual_step < 0.5 * slice_step and len(slice_dy) > 0:
-            slice_dy[-1] += actual_step
-            slice_y_centers[-1] = -(d + actual_step - 0.5 * slice_dy[-1])
-            break
-        y_center = -(d + 0.5 * actual_step)
-        slice_dy.append(actual_step)
-        slice_y_centers.append(y_center)
-        d = next_d
-
-    num_slices = len(slice_dy)
-    slices = [[] for _ in range(num_slices)]
-
+    bucket_step = 2.0
+    num_buckets = int(math.ceil((lookahead + 10.0) / bucket_step)) + 1
+    buckets = [[] for _ in range(num_buckets)]
     for p in points:
-        x, y, z, inten = p
-        d_pt = -y
-        if min_dist <= d_pt < lookahead:
-            if d_pt < zone1:
-                idx = int((d_pt - min_dist) / slice_step)
-            elif d_pt < zone2:
-                idx = 15 + int((d_pt - zone1) / (slice_step * 2.0))
-            else:
-                idx = 25 + int((d_pt - zone2) / (slice_step * 4.0))
-            if 0 <= idx < num_slices:
-                slices[idx].append(p)
+        d = -p[1]
+        if 0.0 <= d < (lookahead + 10.0):
+            b = int(d / bucket_step)
+            buckets[b].append(p)
 
     curr_x = 0.0
+    curr_y = -min_dist
     curr_z = -1.35
-    heading_slope = 0.0
-    dz_dy = 0.0
+    heading = 0.0
+    dz_ds = 0.0
     curvature = 0.0
-
     nominal_half_width = 2.15
-    trajectory = []
 
-    for i in range(num_slices):
-        dy = slice_dy[i]
-        dist_ahead = -slice_y_centers[i]
+    traj = []
+    dist = min_dist
+    while dist < lookahead:
+        ds = slice_step
+        if dist >= zone2:
+            ds = slice_step * 4.0
+        elif dist >= zone1:
+            ds = slice_step * 2.0
+        next_dist = min(dist + ds, lookahead)
+        actual_ds = next_dist - dist
+        if actual_ds < 0.5 * slice_step and len(traj) > 0:
+            break
 
+        dist_ahead = dist + 0.5 * actual_ds
         curv_scale = 1.0 if dist_ahead < 75.0 else max(0.0, 1.0 - (dist_ahead - 75.0) / 35.0)
         eff_curv = curvature * curv_scale
 
-        x_pred = curr_x + heading_slope * dy + 0.5 * eff_curv * (dy ** 2)
-        theta_pred = heading_slope + eff_curv * dy
-        z_pred = curr_z + dz_dy * dy
+        pred_heading = heading + eff_curv * (0.5 * actual_ds)
+        pred_x = curr_x + math.sin(pred_heading) * (0.5 * actual_ds)
+        pred_y = curr_y - math.cos(pred_heading) * (0.5 * actual_ds)
+        pred_z = curr_z + dz_ds * (0.5 * actual_ds)
 
-        active_pts = slices[i]
+        cos_yaw = math.cos(pred_heading)
+        sin_yaw = math.sin(pred_heading)
 
-        # 1. Z estimation with strict slope clamping
+        d_center = -pred_y
+        b_min = max(0, int((d_center - actual_ds - 3.0) / bucket_step))
+        b_max = min(num_buckets - 1, int((d_center + actual_ds + 3.0) / bucket_step))
+
         half_gauge = 0.76
-        rail_pts = [p[2] for p in active_pts if (abs(p[0] - (x_pred - half_gauge)) <= 0.16 or abs(p[0] - (x_pred + half_gauge)) <= 0.16) and (z_pred - 0.35 <= p[2] <= z_pred + 0.30)]
-        track_bed = [p[2] for p in active_pts if abs(p[0] - x_pred) <= 0.85 and (z_pred - 0.35 <= p[2] <= z_pred + 0.30)]
+        rail_pts = []
+        track_bed = []
+        left_walls = []
+        right_walls = []
 
-        measured_z = z_pred
+        half_step = 0.5 * actual_ds
+        for b in range(b_min, b_max + 1):
+            for p in buckets[b]:
+                px, py, pz, _ = p
+                dx = px - pred_x
+                dy = py - pred_y
+                v = dx * sin_yaw - dy * cos_yaw
+                if abs(v) <= half_step:
+                    u = dx * cos_yaw + dy * sin_yaw
+                    if abs(u) <= 0.85 and (pred_z - 0.35 <= pz <= pred_z + 0.30):
+                        track_bed.append(pz)
+                        if abs(abs(u) - half_gauge) <= 0.16:
+                            rail_pts.append(pz)
+                    if pred_z + 0.35 <= pz <= pred_z + 3.80:
+                        if -4.2 <= u <= -1.25:
+                            left_walls.append(u)
+                        elif 1.25 <= u <= 4.2:
+                            right_walls.append(u)
+
+        measured_z = pred_z
         if len(rail_pts) >= 3:
             rail_pts.sort()
             measured_z = rail_pts[int(len(rail_pts) * 0.85)]
@@ -113,22 +116,17 @@ def run_tracker(points, lookahead=180.0, min_dist=2.5, slice_step=2.2, zone1=35.
             track_bed.sort()
             measured_z = track_bed[int(len(track_bed) * 0.85)] + 0.16
 
+        target_dz = (measured_z - curr_z) / actual_ds
         max_grade_slope = 0.035
-        target_dz = (measured_z - curr_z) / dy
-        dz_dy = max(-max_grade_slope, min(max_grade_slope, target_dz))
-        curr_z = curr_z + dz_dy * dy
-
-        # 2. Wall Extraction (pure spatial quantiles, zero point count bias)
-        wall_pts = [p for p in active_pts if curr_z + 0.35 <= p[2] <= curr_z + 3.80]
-        left_walls = [p[0] for p in wall_pts if x_pred - 4.2 <= p[0] <= x_pred - 1.25]
-        right_walls = [p[0] for p in wall_pts if x_pred + 1.25 <= p[0] <= x_pred + 4.2]
+        dz_ds = max(-max_grade_slope, min(max_grade_slope, target_dz))
+        updated_z = curr_z + dz_ds * actual_ds
 
         min_req = 4 if dist_ahead < 45.0 else 3
         has_l = len(left_walls) >= min_req
         has_r = len(right_walls) >= min_req
 
-        l_bound = x_pred - nominal_half_width
-        r_bound = x_pred + nominal_half_width
+        l_bound = -nominal_half_width
+        r_bound = nominal_half_width
         if has_l:
             left_walls.sort()
             l_bound = left_walls[int(len(left_walls) * 0.90)]
@@ -136,16 +134,15 @@ def run_tracker(points, lookahead=180.0, min_dist=2.5, slice_step=2.2, zone1=35.
             right_walls.sort()
             r_bound = right_walls[int(len(right_walls) * 0.10)]
 
-        meas_x = x_pred
+        meas_u = 0.0
         valid_meas = False
 
         if has_l and has_r:
             obs_width = r_bound - l_bound
-            dist_l = x_pred - l_bound
-            dist_r = r_bound - x_pred
-
+            dist_l = -l_bound
+            dist_r = r_bound
             if 3.0 <= obs_width <= 5.4 and abs(dist_l - dist_r) <= 1.2:
-                meas_x = 0.5 * (l_bound + r_bound)
+                meas_u = 0.5 * (l_bound + r_bound)
                 valid_meas = True
                 if dist_ahead < 50.0:
                     nominal_half_width = 0.90 * nominal_half_width + 0.10 * (0.5 * obs_width)
@@ -153,62 +150,78 @@ def run_tracker(points, lookahead=180.0, min_dist=2.5, slice_step=2.2, zone1=35.
                 err_l = abs(dist_l - nominal_half_width)
                 err_r = abs(dist_r - nominal_half_width)
                 if err_l < 0.70 and err_l <= err_r:
-                    meas_x = l_bound + nominal_half_width
+                    meas_u = l_bound + nominal_half_width
                     valid_meas = True
                 elif err_r < 0.70:
-                    meas_x = r_bound - nominal_half_width
+                    meas_u = r_bound - nominal_half_width
                     valid_meas = True
         elif has_r and not has_l:
-            dist_r = r_bound - x_pred
+            dist_r = r_bound
+            if dist_ahead < 15.0:
+                nominal_half_width = 0.80 * nominal_half_width + 0.20 * dist_r
             if abs(dist_r - nominal_half_width) < 0.85:
-                meas_x = r_bound - nominal_half_width
+                meas_u = r_bound - nominal_half_width
                 valid_meas = True
         elif has_l and not has_r:
-            dist_l = x_pred - l_bound
+            dist_l = -l_bound
+            if dist_ahead < 15.0:
+                nominal_half_width = 0.80 * nominal_half_width + 0.20 * dist_l
             if abs(dist_l - nominal_half_width) < 0.85:
-                meas_x = l_bound + nominal_half_width
+                meas_u = l_bound + nominal_half_width
                 valid_meas = True
 
         min_curve_radius = 160.0
         max_curv = 1.0 / min_curve_radius
-        max_dslope = dy / min_curve_radius
+        max_dslope = actual_ds / min_curve_radius
         range_conf = 1.0 if dist_ahead < 50.0 else max(0.15, 1.0 - (dist_ahead - 50.0) / 100.0)
 
         if valid_meas:
-            innov_x = meas_x - x_pred
             K_x = 0.55 * range_conf
-            curr_x = x_pred + K_x * innov_x
+            corr_u = K_x * meas_u
+            updated_x = pred_x + corr_u * cos_yaw
+            updated_y = pred_y + corr_u * sin_yaw
 
-            dtheta = (innov_x / 12.0) * range_conf
+            dtheta = (meas_u / 12.0) * range_conf
             dtheta = max(-max_dslope, min(max_dslope, dtheta))
-            heading_slope = max(-0.45, min(0.45, theta_pred + dtheta))
+            heading = max(-0.45, min(0.45, pred_heading + dtheta))
 
             if dist_ahead < 75.0:
-                dkappa = (2.0 * innov_x / (28.0 ** 2)) * range_conf
+                dkappa = (2.0 * meas_u / (28.0 ** 2)) * range_conf
                 curvature = max(-max_curv, min(max_curv, (curvature * 0.985) + dkappa))
             else:
                 curvature *= 0.96
         else:
-            curr_x = x_pred
-            heading_slope = max(-0.45, min(0.45, heading_slope))
+            updated_x = pred_x
+            updated_y = pred_y
+            heading = max(-0.45, min(0.45, heading))
             curvature *= 0.75
 
-        corridor_l = curr_x - 1.75
-        corridor_r = curr_x + 1.75
-        if l_bound > corridor_l and (curr_x - l_bound) > 1.2:
-            corridor_l = l_bound
-        if r_bound < corridor_r and (r_bound - curr_x) > 1.2:
-            corridor_r = r_bound
+        corridor_l = updated_x - 1.75
+        corridor_r = updated_x + 1.75
+        left_bound_x = updated_x + l_bound * cos_yaw
+        right_bound_x = updated_x + r_bound * cos_yaw
+        if left_bound_x > corridor_l and (updated_x - left_bound_x) > 1.2:
+            corridor_l = left_bound_x
+        if right_bound_x < corridor_r and (right_bound_x - updated_x) > 1.2:
+            corridor_r = right_bound_x
 
-        trajectory.append({
-            'x': curr_x,
-            'y': slice_y_centers[i],
-            'z': curr_z,
+        traj.append({
+            'x': updated_x,
+            'y': updated_y,
+            'z': updated_z,
+            'yaw': heading,
+            'pitch': math.atan2(dz_ds, 1.0),
             'left_bound': corridor_l,
             'right_bound': corridor_r,
             'confidence': range_conf if valid_meas else 0.5 * range_conf
         })
 
+        curr_x = updated_x + math.sin(heading) * (0.5 * actual_ds)
+        curr_y = updated_y - math.cos(heading) * (0.5 * actual_ds)
+        curr_z = updated_z + dz_ds * (0.5 * actual_ds)
+        dist = next_dist
+
+    trajectory = traj
     # Vertical 3-point smoothing filter
     if len(trajectory) >= 3:
         for i in range(1, len(trajectory) - 1):

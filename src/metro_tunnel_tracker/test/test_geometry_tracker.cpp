@@ -231,4 +231,87 @@ TEST(RailGeometryTrackerTest, CurveSingleWallTracking)
   }
 }
 
+TEST(RailGeometryTrackerTest, CustomConfigWithoutHardcodedOffsets)
+{
+  // Test non-default slice_step and zone boundaries to verify no hardcoded 15/25 offsets
+  TrackerConfig config;
+  config.lookahead_distance = 120.0f;
+  config.min_distance = 3.0f;
+  config.slice_step = 1.5f;       // Non-default step (2.2 -> 1.5)
+  config.zone1_start = 30.0f;     // Non-default zone1 (35.5 -> 30.0)
+  config.zone2_start = 60.0f;     // Non-default zone2 (79.5 -> 60.0)
+
+  RailGeometryTracker tracker(config);
+
+  std::vector<Point3D> points;
+  for (float y = -3.0f; y >= -120.0f; y -= 0.5f) {
+    points.push_back(Point3D{-0.76f, y, -1.35f, 10.0f});
+    points.push_back(Point3D{+0.76f, y, -1.35f, 10.0f});
+    points.push_back(Point3D{-2.15f, y, 0.5f, 20.0f});
+    points.push_back(Point3D{+2.15f, y, 0.5f, 20.0f});
+  }
+
+  auto traj = tracker.estimate_track_trajectory(points);
+  ASSERT_FALSE(traj.empty());
+  EXPECT_EQ(traj.size(), static_cast<size_t>(tracker.num_slices()));
+
+  for (const auto & wp : traj) {
+    EXPECT_NEAR(wp.x, 0.0f, 0.15f);
+    EXPECT_NEAR(wp.z_rail, -1.35f, 0.12f);
+    EXPECT_TRUE(wp.valid);
+  }
+}
+
+TEST(RailGeometryTrackerTest, AdaptiveCurvedSlicingOnSharpTurn)
+{
+  // Test a sharp turn (R = 180m) where rails are oriented normal to the curve
+  TrackerConfig config;
+  config.lookahead_distance = 80.0f;
+  config.min_distance = 2.5f;
+  config.slice_step = 2.2f;
+  config.min_curve_radius = 160.0f;
+  config.single_tunnel_radius = 2.15f;
+
+  RailGeometryTracker tracker(config);
+
+  const float R = 180.0f; // Sharp curve
+  std::vector<Point3D> points;
+
+  for (float s = 2.5f; s <= 80.0f; s += 0.25f) {
+    float yaw = -s / R; // Turning right (positive X)
+    float xc = R * (1.0f - std::cos(s / R));
+    float yc = -R * std::sin(s / R);
+
+    float cos_yaw = std::cos(yaw);
+    float sin_yaw = std::sin(yaw);
+
+    // Left and right rails located perpendicular to the curve (in normal coordinate u)
+    for (float u : {-0.76f, 0.76f}) {
+      float px = xc + u * cos_yaw;
+      float py = yc + u * sin_yaw;
+      points.push_back(Point3D{px, py, -1.35f, 25.0f});
+    }
+
+    // Left and right walls located perpendicular to the curve
+    for (float u : {-2.15f, 2.15f}) {
+      for (float z = -0.5f; z <= 2.0f; z += 0.5f) {
+        float px = xc + u * cos_yaw;
+        float py = yc + u * sin_yaw;
+        points.push_back(Point3D{px, py, z, 20.0f});
+      }
+    }
+  }
+
+  auto traj = tracker.estimate_track_trajectory(points);
+  ASSERT_FALSE(traj.empty());
+
+  for (const auto & wp : traj) {
+    float dist = std::sqrt(wp.x * wp.x + wp.y * wp.y);
+    float expected_xc = R * (1.0f - std::cos(dist / R));
+    EXPECT_NEAR(wp.x, expected_xc, 0.40f);
+    EXPECT_NEAR(wp.z_rail, -1.35f, 0.15f);
+    EXPECT_TRUE(wp.valid);
+  }
+}
+
 }  // namespace metro_tunnel_tracker
