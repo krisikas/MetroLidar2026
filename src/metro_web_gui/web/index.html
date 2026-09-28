@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Контроль габарита и детекция препятствий</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <!-- Верхняя строка телеметрии -->
+  <header class="top-bar">
+    <div class="system-title">КОНТРОЛЬ ПУТИ И ГАБАРИТА</div>
+    <div class="metrics-strip">
+      <div class="metric-cell">
+        <span class="cell-label">Связь:</span>
+        <span class="cell-value" id="val-dds">ОЖИДАНИЕ</span>
+      </div>
+      <div class="metric-cell">
+        <span class="cell-label">Кадров:</span>
+        <span class="cell-value" id="val-hz">0.0 Гц</span>
+      </div>
+      <div class="metric-cell">
+        <span class="cell-label">Время расчета:</span>
+        <span class="cell-value" id="val-calc-time">-- мс</span>
+      </div>
+      <div class="metric-cell">
+        <span class="cell-label">Точек кадра:</span>
+        <span class="cell-value" id="val-points-count">0</span>
+      </div>
+      <div class="metric-cell">
+        <span class="cell-label">Горизонт:</span>
+        <span class="cell-value">150.0 м</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- Рабочая область -->
+  <div class="workspace">
+    <!-- Секция 3D сцены -->
+    <div class="viewport-section">
+      <div class="viewport-toolbar">
+        <div class="control-group">
+          <button class="flat-btn active" id="btn-cam-fpv">Вид из кабины</button>
+          <button class="flat-btn" id="btn-cam-orbit">3D обзор</button>
+          <button class="flat-btn" id="btn-cam-reset">Сброс камеры</button>
+        </div>
+        <div class="control-group">
+          <label class="flat-chk"><input type="checkbox" id="chk-rails" checked> Путь</label>
+          <label class="flat-chk"><input type="checkbox" id="chk-envelope" checked> Габарит</label>
+          <label class="flat-chk"><input type="checkbox" id="chk-points" checked> Точки</label>
+        </div>
+      </div>
+
+      <div class="canvas-wrapper">
+        <canvas id="gl-canvas"></canvas>
+
+        <!-- Информационный блок состояния пути -->
+        <div class="hud-overlay" id="status-hud">
+          <div class="hud-title" id="hud-status-text">ПУТЬ СВОБОДЕН</div>
+          <div class="hud-grid">
+            <div class="hud-item">
+              <span class="hud-label">Скорость поезда:</span>
+              <span class="hud-val" id="disp-train-speed">0.0 км/ч (0.00 м/с)</span>
+            </div>
+            <div class="hud-item">
+              <span class="hud-label">Тормозной путь:</span>
+              <span class="hud-val" id="disp-braking-distance">0.0 м</span>
+            </div>
+            <div class="hud-item">
+              <span class="hud-label">Ближайший объект:</span>
+              <span class="hud-val" id="disp-closest-obstacle">—</span>
+            </div>
+            <div class="hud-item">
+              <span class="hud-label">Время до объекта (TTC):</span>
+              <span class="hud-val" id="disp-time-to-collision">—</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Нижняя секция: Реестр объектов -->
+    <div class="table-section">
+      <div class="table-header-bar">
+        <span class="table-title">ОБНАРУЖЕННЫЕ ОБЪЕКТЫ В ЗОНЕ КОНТРОЛЯ (<span id="count-obstacles">0</span>)</span>
+      </div>
+      <div class="table-container">
+        <table class="grid-table">
+          <thead>
+            <tr>
+              <th style="width: 50px;">№</th>
+              <th style="width: 220px;">Категория</th>
+              <th style="width: 120px;">Дистанция</th>
+              <th style="width: 100px;">Смещение X</th>
+              <th style="width: 100px;">Высота Z</th>
+              <th style="width: 140px;">Габариты (Ш×В)</th>
+              <th style="width: 90px;">Точек</th>
+              <th style="width: 130px;">Статус угрозы</th>
+            </tr>
+          </thead>
+          <tbody id="table-body-obstacles">
+            <tr>
+              <td colspan="8" class="row-empty">Объектов в габарите пути не обнаружено</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <script src="webgl_view.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

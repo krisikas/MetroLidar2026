@@ -1,0 +1,331 @@
+/* ==============================================================================
+   Инженерная панель мониторинга габарита и детекции препятствий
+   Стиль: Технический CAD/SCADA, плоские границы (0px radius), единая толщина шрифта (400)
+   ============================================================================== */
+
+:root {
+  --bg-main: #181a1f;
+  --bg-panel: #21252b;
+  --bg-workspace: #1b1e24;
+  --bg-cell: #282c34;
+  --bg-hover: #2c313a;
+
+  --border-color: #3b404d;
+  --border-subtle: #2d313b;
+
+  --text-main: #d7dae0;
+  --text-dim: #9da5b4;
+  --text-muted: #5c6370;
+
+  --status-normal: #4b8559;
+  --status-normal-bg: #1f2e23;
+  --status-warn: #b8860b;
+  --status-warn-bg: #332b17;
+  --status-danger: #b24c4c;
+  --status-danger-bg: #331f1f;
+  --status-info: #4a75a0;
+  --status-info-bg: #1a2736;
+
+  --font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  border-radius: 0 !important;
+  font-weight: 400 !important;
+}
+
+body {
+  background-color: var(--bg-main);
+  color: var(--text-main);
+  font-family: var(--font-family);
+  font-size: 12px;
+  line-height: 1.4;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  user-select: none;
+}
+
+/* --- Верхняя полоса телеметрии --- */
+.top-bar {
+  background-color: var(--bg-panel);
+  border-bottom: 1px solid var(--border-color);
+  height: 38px;
+  padding: 0 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-shrink: 0;
+}
+
+.system-title {
+  color: #e5e9f0;
+  font-size: 13px;
+  letter-spacing: 0.5px;
+}
+
+.metrics-strip {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.metric-cell {
+  background-color: var(--bg-cell);
+  border: 1px solid var(--border-color);
+  padding: 3px 8px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.cell-label {
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+.cell-value {
+  color: var(--text-main);
+  font-size: 12px;
+}
+
+.cell-value.online {
+  color: #73c991;
+}
+
+/* --- Рабочая область (Split Layout) --- */
+.workspace {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  background-color: var(--bg-workspace);
+  overflow: hidden;
+}
+
+/* 3D Секция */
+.viewport-section {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  min-height: 250px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.viewport-toolbar {
+  background-color: var(--bg-panel);
+  border-bottom: 1px solid var(--border-subtle);
+  height: 34px;
+  padding: 0 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.control-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.flat-btn {
+  background-color: var(--bg-cell);
+  border: 1px solid var(--border-color);
+  color: var(--text-main);
+  padding: 4px 10px;
+  font-family: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.flat-btn:hover {
+  background-color: var(--bg-hover);
+}
+
+.flat-btn.active {
+  background-color: #3e4451;
+  border-color: #5c6370;
+  color: #ffffff;
+}
+
+.flat-chk {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.flat-chk input {
+  cursor: pointer;
+  accent-color: #5c6370;
+}
+
+.canvas-wrapper {
+  flex: 1;
+  position: relative;
+  overflow: hidden;
+  background-color: #101216;
+}
+
+canvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+/* Информационный HUD поверх 3D сцены */
+.hud-overlay {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  width: 320px;
+  background-color: rgba(33, 37, 43, 0.92);
+  border: 1px solid var(--border-color);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.hud-title {
+  font-size: 12px;
+  padding: 4px 8px;
+  text-align: center;
+  border: 1px solid var(--status-normal);
+  background-color: var(--status-normal-bg);
+  color: #a3e6b5;
+}
+
+.hud-title.warning {
+  border-color: var(--status-warn);
+  background-color: var(--status-warn-bg);
+  color: #f0c674;
+}
+
+.hud-title.danger {
+  border-color: var(--status-danger);
+  background-color: var(--status-danger-bg);
+  color: #f78c8c;
+}
+
+.hud-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.hud-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 1px solid var(--border-subtle);
+  padding-bottom: 4px;
+}
+
+.hud-label {
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+.hud-val {
+  color: var(--text-main);
+  font-size: 12px;
+}
+
+/* --- Нижняя секция: Полноразмерная таблица --- */
+.table-section {
+  height: 200px;
+  display: flex;
+  flex-direction: column;
+  background-color: var(--bg-panel);
+  flex-shrink: 0;
+}
+
+.table-header-bar {
+  background-color: var(--bg-panel);
+  border-bottom: 1px solid var(--border-color);
+  padding: 6px 14px;
+  display: flex;
+  align-items: center;
+}
+
+.table-title {
+  color: var(--text-dim);
+  font-size: 11px;
+  letter-spacing: 0.3px;
+}
+
+.table-container {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: auto;
+  background-color: var(--bg-cell);
+}
+
+.grid-table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+  font-size: 11px;
+}
+
+.grid-table th {
+  background-color: var(--bg-panel);
+  color: var(--text-dim);
+  border-bottom: 1px solid var(--border-color);
+  padding: 6px 10px;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  white-space: nowrap;
+}
+
+.grid-table td {
+  border-bottom: 1px solid var(--border-subtle);
+  padding: 6px 10px;
+  color: var(--text-main);
+  white-space: nowrap;
+}
+
+.grid-table tr:hover td {
+  background-color: var(--bg-hover);
+}
+
+.row-empty {
+  text-align: center;
+  padding: 24px !important;
+  color: var(--text-muted);
+}
+
+/* Статусные плашки */
+.status-tag {
+  display: inline-block;
+  padding: 2px 6px;
+  border: 1px solid var(--border-color);
+  font-size: 10px;
+  text-align: center;
+}
+
+.status-tag.tag-danger {
+  border-color: var(--status-danger);
+  background-color: var(--status-danger-bg);
+  color: #f78c8c;
+}
+
+.status-tag.tag-warning {
+  border-color: var(--status-warn);
+  background-color: var(--status-warn-bg);
+  color: #f0c674;
+}
+
+.status-tag.tag-info {
+  border-color: var(--status-info);
+  background-color: var(--status-info-bg);
+  color: #8ab4f8;
+}

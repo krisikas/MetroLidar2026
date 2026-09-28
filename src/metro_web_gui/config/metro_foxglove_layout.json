@@ -1,0 +1,102 @@
+{
+  "configById": {
+    "3D!1": {
+      "cameraState": {
+        "perspective": true,
+        "distance": 25.0,
+        "phi": 60.0,
+        "thetaOffset": 0.0,
+        "targetOffset": [0.0, -15.0, 0.0],
+        "target": [0.0, 0.0, 0.0],
+        "fovy": 45.0,
+        "near": 0.5,
+        "far": 250.0
+      },
+      "followMode": "follow-pose",
+      "scene": {
+        "enableStats": true,
+        "transforms": {
+          "showBounds": false
+        }
+      },
+      "transforms": {},
+      "topics": {
+        "/lidar_points": {
+          "visible": true,
+          "colorMode": "colormap",
+          "colorMap": "turbo",
+          "pointSize": 3.0
+        },
+        "/metro/markers": {
+          "visible": true
+        },
+        "/metro/clearance_envelope": {
+          "visible": true
+        },
+        "/metro/track_path": {
+          "visible": true
+        }
+      },
+      "layers": {
+        "grid": {
+          "visible": true,
+          "size": 100,
+          "divisions": 50
+        }
+      },
+      "publish": {
+        "type": "point",
+        "poseTopic": "/move_base_simple/goal",
+        "pointTopic": "/clicked_point"
+      },
+      "imageMode": {}
+    },
+    "Plot!1": {
+      "title": "Скорость движения состава (м/с)",
+      "paths": [
+        {
+          "value": "/metro/train_speed.data",
+          "enabled": true,
+          "timestampMethod": "receiveTime",
+          "color": "#58a6ff"
+        },
+        {
+          "value": "/metro/obstacles.min_distance_to_obstacle",
+          "enabled": true,
+          "timestampMethod": "receiveTime",
+          "color": "#f85149"
+        }
+      ],
+      "showLegend": true,
+      "xAxisVal": "timestamp"
+    },
+    "RawMessages!1": {
+      "topicPath": "/metro/obstacles",
+      "diffTopicPath": "",
+      "diffMethod": "custom",
+      "diffEnabled": false,
+      "showFullMessageForDiff": false
+    },
+    "Diagnostics!1": {
+      "topicToRender": "/metro/telemetry"
+    }
+  },
+  "globalVariables": {},
+  "userNodes": {},
+  "playbackConfig": {
+    "speed": 1
+  },
+  "layout": {
+    "direction": "row",
+    "first": "3D!1",
+    "second": {
+      "direction": "column",
+      "first": "Plot!1",
+      "second": {
+        "direction": "column",
+        "first": "RawMessages!1",
+        "second": "Diagnostics!1"
+      }
+    }
+  }
+}

@@ -1,0 +1,28 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>metro_web_gui</name>
+  <version>1.0.0</version>
+  <description>
+    Standalone Real-Time Web Dashboard &amp; 3D FPV Viewer for Moscow Metro Autonomous Obstacle Detection.
+    Features Cab First-Person View, Orbit 3D, GoA4 Telemetry HUD, and Obstacle Tracking Table.
+  </description>
+  <maintainer email="engineer@metrolidar2026.moscow">MetroLidar2026 Team</maintainer>
+  <license>Proprietary / Hackathon 2026</license>
+
+  <depend>rclpy</depend>
+  <depend>std_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>nav_msgs</depend>
+  <depend>visualization_msgs</depend>
+  <depend>metro_obstacle_detector_interfaces</depend>
+
+  <test_depend>ament_copyright</test_depend>
+  <test_depend>ament_flake8</test_depend>
+  <test_depend>ament_pep257</test_depend>
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

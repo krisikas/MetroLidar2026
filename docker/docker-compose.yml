@@ -1,0 +1,44 @@
+version: '3.8'
+
+services:
+  detector:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: metrolidar2026:latest
+    container_name: metrolidar_obstacle_detector
+    restart: unless-stopped
+    network_mode: "host"
+    ipc: "host"
+    shm_size: "4gb"
+    volumes:
+      - ../archive:/ros2_ws/archive:ro
+      - ./cyclonedds.xml:/ros2_ws/cyclonedds.xml:ro
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+    environment:
+      - ROS_DOMAIN_ID=0
+      - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+      - CYCLONEDDS_URI=file:///ros2_ws/cyclonedds.xml
+      - DISPLAY=${DISPLAY:-}
+    stdin_open: true
+    tty: true
+    command: >
+      ros2 launch metro_obstacle_detector obstacle_detector.launch.py
+      lidar_topic:=/lidar_points
+      qos_reliability:=sensor_data
+
+  foxglove:
+    image: metrolidar2026:latest
+    container_name: metrolidar_foxglove_bridge
+    restart: unless-stopped
+    network_mode: "host"
+    ports:
+      - "8765:8765"
+    ipc: "host"
+    profiles: ["vis"]
+    environment:
+      - ROS_DOMAIN_ID=0
+      - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+      - CYCLONEDDS_URI=file:///ros2_ws/cyclonedds.xml
+    command: >
+      ros2 launch foxglove_bridge foxglove_bridge_launch.xml port:=8765

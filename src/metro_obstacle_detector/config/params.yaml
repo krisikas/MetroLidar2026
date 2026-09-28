@@ -1,0 +1,24 @@
+metro_obstacle_detector_node:
+  ros__parameters:
+    # Sensor and Topics
+    lidar_topic: "/lidar_points"
+    target_frame: "hesai_lidar"
+    qos_reliability: "sensor_data"   # Options: "sensor_data", "best_effort", "reliable"
+    use_gpu: false                   # Set to true when CUDA runtime is active
+
+    # Visualizations
+    publish_markers: true
+    publish_envelope: true
+
+    # Train Kinematics and Dimensions
+    train_speed_mps: 0.0             # Initial speed (calculated dynamically via LiDAR)
+    lookahead_distance: 150.0        # Scanning horizon set to 150 m per requirements
+    min_distance: 2.0                # Cab near-zone deadband in meters
+    base_step: 2.0                   # Discretization step along track (m)
+    gauge: 1.520                     # Russian standard 1520 mm gauge
+    nominal_tor_height: 1.075        # LiDAR optical center height above rail crown (m)
+
+    # Railway Physical Limits (SP 120.13330 & PTE)
+    min_curve_radius: 160.0          # Minimum horizontal curvature radius (m)
+    emergency_deceleration: 1.20     # PTE emergency braking deceleration (m/s^2)
+    system_reaction_time: 0.50       # Latency + pneumatic propagation delay (s)
