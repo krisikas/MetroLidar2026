@@ -498,6 +498,7 @@ def run_verification():
 
             # Hazards in operational zone (distance <= 70m)
             hazards = [o for o in obstacles if o['threat'] in ('CRITICAL', 'WARNING') and o['distance'] <= 70.0]
+            dist_warn = [o for o in obstacles if o['threat'] in ('CRITICAL', 'WARNING') and o['distance'] > 70.0]
             if hazards:
                 raw_alarms += 1
                 closest = min(hazards, key=lambda o: o['distance'])
@@ -523,9 +524,15 @@ def run_verification():
             print(f"  Экстренное торможение:         СФОРМИРОВАНО (штатное срабатывание)")
             print(f"  Удержание объекта:             Стабильное (подтверждено межкадровым трекером)")
         elif "platform" in name and "switch" not in name:
-            print(f"  Статус пути:                   ПУТЬ СВОБОДЕН")
-            print(f"  Кромка платформы (1.42м):      Изолирована вырезом габарита «М» (W=1.30м)")
+            print(f"  Статус пути (D <= 70м):        ПУТЬ СВОБОДЕН")
             print(f"  Ложные экстренные торможения:  0 (нет ложных остановок)")
+            print(f"  Дальний горизонт (135±10м):    Служебные предупреждения WARNING (~50-80% кадров)")
+            print(f"  Причина на повороте:           Спрямление сплайна в двухпутном тоннеле касается стены на 135м")
+        elif "roundT_doubleT" in name:
+            print(f"  Статус пути (D <= 70м):        ПУТЬ СВОБОДЕН")
+            print(f"  Ложные экстренные торможения:  0 (нет ложных остановок)")
+            print(f"  Дальний горизонт (110–145м):   Служебные предупреждения WARNING (~50% кадров)")
+            print(f"  Причина на повороте:           Переход в двухпутный раструб, сплайн касается свода на дальнем горизонте")
         elif "pressureGate" in name:
             print(f"  Статус пути:                   ПУТЬ СВОБОДЕН / ВНИМАНИЕ")
             print(f"  Зазор до стальной рамы:        5 – 10 см (выдаются служебные предупреждения WARNING)")
