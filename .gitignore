@@ -58,4 +58,8 @@ ENV/
 env/
 scratch/
 
+# Large video files exceeding GitHub 100MB limit (optimized MP4 tracked instead)
+*.m4v
+
 PROJECT.md
+
