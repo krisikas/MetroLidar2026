@@ -50,6 +50,7 @@ Thumbs.db
 *.swo
 *~
 *.bak
+~$*
 
 # Virtual Environments & Scratch work
 .venv/
