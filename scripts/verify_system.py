@@ -237,7 +237,7 @@ class MetroPipelineVerifier:
                         meas_u = 0.5 * (l_bound + r_bound)
                         valid_wall = True
 
-            range_conf = 1.0 if dist_ahead < 50.0 else max(0.15, 1.0 - (dist_ahead - 50.0) / 100.0)
+            range_conf = 1.0 if dist_ahead < 60.0 else max(0.20, 1.0 - (dist_ahead - 60.0) / 100.0)
 
             if valid_wall:
                 corr_gain = 0.45 * range_conf
@@ -245,16 +245,16 @@ class MetroPipelineVerifier:
                 updated_y = pred_y + corr_gain * meas_u * sin_yaw
                 dtheta = max(-actual_ds / min_rad, min(actual_ds / min_rad, (meas_u / 12.0) * range_conf))
                 heading = max(-0.45, min(0.45, pred_heading + dtheta))
-                if dist_ahead < 75.0:
-                    dkappa = (2.0 * meas_u / (28.0 ** 2)) * range_conf
-                    curvature = max(-max_curv, min(max_curv, curvature * 0.985 + dkappa))
-                else:
-                    curvature *= 0.96
+                dkappa = (2.0 * meas_u / (28.0 ** 2)) * range_conf
+                curvature = max(-max_curv, min(max_curv, curvature * 0.992 + dkappa))
             else:
                 updated_x = pred_x
                 updated_y = pred_y
-                heading = (heading * 0.85) if is_double_track else (pred_heading * 0.85)
-                curvature *= 0.85
+                if is_double_track:
+                    heading *= 0.85
+                    curvature = 0.0
+                else:
+                    heading = pred_heading
 
             traj.append({
                 's': dist - 2.0,
@@ -276,6 +276,17 @@ class MetroPipelineVerifier:
         if len(traj) >= 3:
             for i in range(1, len(traj) - 1):
                 traj[i]['z'] = 0.25 * traj[i-1]['z'] + 0.50 * traj[i]['z'] + 0.25 * traj[i+1]['z']
+
+        # Smooth horizontal profile (X and Y) with 5-point Gaussian kernel to remove sharp kinks
+        if len(traj) >= 5:
+            xs_smooth = [p['x'] for p in traj]
+            ys_smooth = [p['y'] for p in traj]
+            for i in range(2, len(traj) - 2):
+                xs_smooth[i] = 0.08 * traj[i-2]['x'] + 0.25 * traj[i-1]['x'] + 0.34 * traj[i]['x'] + 0.25 * traj[i+1]['x'] + 0.08 * traj[i+2]['x']
+                ys_smooth[i] = 0.08 * traj[i-2]['y'] + 0.25 * traj[i-1]['y'] + 0.34 * traj[i]['y'] + 0.25 * traj[i+1]['y'] + 0.08 * traj[i+2]['y']
+            for i in range(1, len(traj) - 1):
+                traj[i]['x'] = xs_smooth[i]
+                traj[i]['y'] = ys_smooth[i]
 
         return traj
 
@@ -445,8 +456,14 @@ def run_verification():
 
     verifier = MetroPipelineVerifier()
 
-    # 1. Verify Empty Tunnels from for_hackathon
-    hackathon_bags = sorted(glob.glob('archive/for_hackathon/*/*.db3'))
+    # 1. Verify Empty Tunnels from bags/ or archive/for_hackathon/
+    discovered_bags = {}
+    for pattern in ['bags/*/*.db3', 'archive/for_hackathon/*/*.db3']:
+        for b in glob.glob(pattern):
+            bname = os.path.basename(os.path.dirname(b))
+            if bname not in discovered_bags:
+                discovered_bags[bname] = b
+    hackathon_bags = [discovered_bags[k] for k in sorted(discovered_bags.keys())]
     print(f"\n[PHASE 1] Real Tunnels Verification ({len(hackathon_bags)} bags):")
 
     total_pass = 0
@@ -492,7 +509,7 @@ def run_verification():
                     print(f"     Obstacle at {h['distance']:.1f}m: pos=({h['pos'][0]:.2f}, {h['pos'][1]:.2f}, {h['pos'][2]:.2f}), points={h['points']}, sdf={h['sdf']:.2f}m")
 
     # 2. Verify Synthetic Obstacle Bag (cloud_with_fake_obj)
-    fake_bag = 'archive/cloud_with_fake_obj/cloud_with_fake_obj_0.db3'
+    fake_bag = 'bags/cloud_with_fake_obj/cloud_with_fake_obj_0.db3' if os.path.exists('bags/cloud_with_fake_obj/cloud_with_fake_obj_0.db3') else 'archive/cloud_with_fake_obj/cloud_with_fake_obj_0.db3'
     if os.path.exists(fake_bag):
         print(f"\n[PHASE 2] Synthetic Obstacles Verification (cloud_with_fake_obj):")
         conn = sqlite3.connect(fake_bag)

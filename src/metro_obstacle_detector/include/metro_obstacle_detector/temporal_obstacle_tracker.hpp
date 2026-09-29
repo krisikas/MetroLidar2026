@@ -9,7 +9,7 @@ namespace metro_obstacle_detector
 
 struct TemporalTrackerConfig
 {
-  uint32_t min_hits_to_confirm{3};     // Minimum frames to confirm obstacle
+  uint32_t min_hits_to_confirm{2};     // Minimum frames to confirm obstacle (filters 1-frame spikes)
   uint32_t max_misses{3};              // Missed frames before deletion
   float association_dist_thresh{2.5f}; // Max association gating distance (m)
   float process_noise{0.20f};          // Kalman process noise

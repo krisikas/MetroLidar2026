@@ -135,12 +135,8 @@ void TemporalObstacleTracker::update(
       new_trk.hits = 1;
       new_trk.misses = 0;
       new_trk.age = 1;
-      new_trk.confidence = 0.40f;
-      // High-confidence instant promotion for large obstacles or low rail bars
-      if (detections[i].category == ObstacleCategory::RAIL_SURFACE ||
-          detections[i].point_count >= 50) {
-        new_trk.confirmed = true;
-      }
+      // Подтверждение требует наблюдения в течение минимум 2 кадров (отсеивание случайных выбросов)
+      new_trk.confirmed = (config_.min_hits_to_confirm <= 1);
       tracks_.push_back(new_trk);
     }
   }

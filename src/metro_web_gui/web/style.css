@@ -50,7 +50,7 @@ body {
   user-select: none;
 }
 
-/* --- Верхняя полоса телеметрии --- */
+/* --- Верхняя полоса --- */
 .top-bar {
   background-color: var(--bg-panel);
   border-bottom: 1px solid var(--border-color);
@@ -68,16 +68,10 @@ body {
   letter-spacing: 0.5px;
 }
 
-.metrics-strip {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.metric-cell {
+.connection-status {
   background-color: var(--bg-cell);
   border: 1px solid var(--border-color);
-  padding: 3px 8px;
+  padding: 4px 10px;
   display: flex;
   align-items: center;
   gap: 6px;
@@ -132,6 +126,16 @@ body {
   gap: 8px;
 }
 
+.nav-help-hint {
+  margin-left: auto;
+}
+
+.hint-text {
+  font-size: 11px;
+  color: var(--text-muted);
+  user-select: none;
+}
+
 .flat-btn {
   background-color: var(--bg-cell);
   border: 1px solid var(--border-color);
@@ -180,17 +184,26 @@ canvas {
 }
 
 /* Информационный HUD поверх 3D сцены */
-.hud-overlay {
+.hud-stack {
   position: absolute;
   top: 12px;
   right: 12px;
   width: 320px;
-  background-color: rgba(33, 37, 43, 0.92);
-  border: 1px solid var(--border-color);
-  padding: 10px 12px;
   display: flex;
   flex-direction: column;
   gap: 8px;
+  z-index: 10;
+  pointer-events: none;
+}
+
+.hud-overlay {
+  pointer-events: auto;
+  background-color: rgba(33, 37, 43, 0.94);
+  border: 1px solid var(--border-color);
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
 
 .hud-title {
@@ -225,7 +238,7 @@ canvas {
   justify-content: space-between;
   align-items: center;
   border-bottom: 1px solid var(--border-subtle);
-  padding-bottom: 4px;
+  padding-bottom: 3px;
 }
 
 .hud-label {
@@ -236,6 +249,39 @@ canvas {
 .hud-val {
   color: var(--text-main);
   font-size: 12px;
+}
+
+.hud-panel-title {
+  font-size: 11px;
+  color: var(--text-dim);
+  border-bottom: 1px solid var(--border-subtle);
+  padding-bottom: 3px;
+  margin-bottom: 2px;
+}
+
+.telemetry-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.telemetry-table td {
+  padding: 2.5px 0;
+  font-size: 11px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+.telemetry-table tr:last-child td {
+  border-bottom: none;
+}
+
+.tel-label {
+  color: var(--text-dim);
+  text-align: left;
+}
+
+.tel-val {
+  color: var(--text-main);
+  text-align: right;
 }
 
 /* --- Нижняя секция: Полноразмерная таблица --- */

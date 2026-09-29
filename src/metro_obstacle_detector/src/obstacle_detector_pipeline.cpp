@@ -36,7 +36,9 @@ void ObstacleDetectorPipeline::reset()
   temporal_tracker_.reset();
   velocity_estimator_.reset();
   rail_tracker_.reset();
+  track_spline_.reset();
   first_frame_ = true;
+  last_stamp_ns_ = 0;
 }
 
 bool ObstacleDetectorPipeline::process_frame(
@@ -54,13 +56,20 @@ bool ObstacleDetectorPipeline::process_frame(
     return false;
   }
 
-  // Calculate dt for velocity and Kalman prediction
+  // Calculate dt for velocity and Kalman prediction (preferring message timestamp)
   float dt = 0.10f;
+  const uint64_t curr_stamp_ns = static_cast<uint64_t>(msg.header.stamp.sec) * 1000000000ULL +
+                                 static_cast<uint64_t>(msg.header.stamp.nanosec);
   if (!first_frame_) {
-    const std::chrono::duration<float> elapsed = t0 - last_frame_time_;
-    dt = elapsed.count();
-    if (dt <= 0.001f || dt > 1.0f) dt = 0.10f;
+    if (curr_stamp_ns > 0 && last_stamp_ns_ > 0 && curr_stamp_ns > last_stamp_ns_) {
+      dt = static_cast<float>(curr_stamp_ns - last_stamp_ns_) * 1e-9f;
+    } else {
+      const std::chrono::duration<float> elapsed = t0 - last_frame_time_;
+      dt = elapsed.count();
+    }
+    if (dt <= 0.005f || dt > 1.0f) dt = 0.10f;
   }
+  last_stamp_ns_ = curr_stamp_ns;
   last_frame_time_ = t0;
   first_frame_ = false;
 

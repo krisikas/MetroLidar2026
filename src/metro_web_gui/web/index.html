@@ -7,30 +7,12 @@
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <!-- Верхняя строка телеметрии -->
+  <!-- Верхняя строка: Название системы и статус подключения -->
   <header class="top-bar">
-    <div class="system-title">КОНТРОЛЬ ПУТИ И ГАБАРИТА</div>
-    <div class="metrics-strip">
-      <div class="metric-cell">
-        <span class="cell-label">Связь:</span>
-        <span class="cell-value" id="val-dds">ОЖИДАНИЕ</span>
-      </div>
-      <div class="metric-cell">
-        <span class="cell-label">Кадров:</span>
-        <span class="cell-value" id="val-hz">0.0 Гц</span>
-      </div>
-      <div class="metric-cell">
-        <span class="cell-label">Время расчета:</span>
-        <span class="cell-value" id="val-calc-time">-- мс</span>
-      </div>
-      <div class="metric-cell">
-        <span class="cell-label">Точек кадра:</span>
-        <span class="cell-value" id="val-points-count">0</span>
-      </div>
-      <div class="metric-cell">
-        <span class="cell-label">Горизонт:</span>
-        <span class="cell-value">150.0 м</span>
-      </div>
+    <div class="system-title">Контроль пути и габарита</div>
+    <div class="connection-status">
+      <span class="cell-label">Связь:</span>
+      <span class="cell-value" id="val-dds">Подключение...</span>
     </div>
   </header>
 
@@ -40,40 +22,78 @@
     <div class="viewport-section">
       <div class="viewport-toolbar">
         <div class="control-group">
-          <button class="flat-btn active" id="btn-cam-fpv">Вид из кабины</button>
-          <button class="flat-btn" id="btn-cam-orbit">3D обзор</button>
-          <button class="flat-btn" id="btn-cam-reset">Сброс камеры</button>
+          <button class="flat-btn" id="btn-cam-fpv">Вид из кабины</button>
+          <button class="flat-btn active" id="btn-cam-orbit">3D обзор</button>
         </div>
         <div class="control-group">
           <label class="flat-chk"><input type="checkbox" id="chk-rails" checked> Путь</label>
           <label class="flat-chk"><input type="checkbox" id="chk-envelope" checked> Габарит</label>
-          <label class="flat-chk"><input type="checkbox" id="chk-points" checked> Точки</label>
+          <label class="flat-chk"><input type="checkbox" id="chk-points" checked> Точки лидара</label>
+        </div>
+        <div class="control-group nav-help-hint">
+          <span class="hint-text">3D обзор: Вращение — ПКМ | Перемещение — ЛКМ | Зум — Колесо</span>
         </div>
       </div>
 
       <div class="canvas-wrapper">
         <canvas id="gl-canvas"></canvas>
 
-        <!-- Информационный блок состояния пути -->
-        <div class="hud-overlay" id="status-hud">
-          <div class="hud-title" id="hud-status-text">ПУТЬ СВОБОДЕН</div>
-          <div class="hud-grid">
-            <div class="hud-item">
-              <span class="hud-label">Скорость поезда:</span>
-              <span class="hud-val" id="disp-train-speed">0.0 км/ч (0.00 м/с)</span>
+        <div class="hud-stack">
+          <!-- Информационный блок состояния пути -->
+          <div class="hud-overlay" id="status-hud">
+            <div class="hud-title" id="hud-status-text">Путь свободен</div>
+            <div class="hud-grid">
+              <div class="hud-item">
+                <span class="hud-label">Скорость поезда (лидар):</span>
+                <span class="hud-val" id="disp-train-speed">0.0 км/ч (состав остановлен)</span>
+              </div>
+              <div class="hud-item">
+                <span class="hud-label">Тормозной путь:</span>
+                <span class="hud-val" id="disp-braking-distance">0.0 м</span>
+              </div>
+              <div class="hud-item">
+                <span class="hud-label">Ближайший объект:</span>
+                <span class="hud-val" id="disp-closest-obstacle">—</span>
+              </div>
+              <div class="hud-item">
+                <span class="hud-label">Время до объекта (TTC):</span>
+                <span class="hud-val" id="disp-time-to-collision">—</span>
+              </div>
             </div>
-            <div class="hud-item">
-              <span class="hud-label">Тормозной путь:</span>
-              <span class="hud-val" id="disp-braking-distance">0.0 м</span>
-            </div>
-            <div class="hud-item">
-              <span class="hud-label">Ближайший объект:</span>
-              <span class="hud-val" id="disp-closest-obstacle">—</span>
-            </div>
-            <div class="hud-item">
-              <span class="hud-label">Время до объекта (TTC):</span>
-              <span class="hud-val" id="disp-time-to-collision">—</span>
-            </div>
+          </div>
+
+          <!-- Таблица параметров обработки и частот системы -->
+          <div class="hud-overlay hud-telemetry" id="telemetry-hud">
+            <div class="hud-panel-title">Параметры обработки</div>
+            <table class="telemetry-table">
+              <tbody>
+                <tr>
+                  <td class="tel-label">Лидар (вход):</td>
+                  <td class="tel-val" id="val-hz-lidar">0.0 Гц</td>
+                </tr>
+                <tr>
+                  <td class="tel-label">Трекинг пути:</td>
+                  <td class="tel-val" id="val-hz-path">0.0 Гц</td>
+                </tr>
+                <tr>
+                  <td class="tel-label">Детекция:</td>
+                  <td class="tel-val" id="val-hz-obs">0.0 Гц</td>
+                </tr>
+                <tr>
+                  <td class="tel-label">Время расчета:</td>
+                  <td class="tel-val" id="val-calc-time">-- мс</td>
+                </tr>
+                <tr>
+                  <td class="tel-label">Точек в кадре:</td>
+                  <td class="tel-val" id="val-points-count">0</td>
+                </tr>
+                <tr>
+                  <td class="tel-label">Горизонт контроля:</td>
+                  <td class="tel-val">150.0 м</td>
+                </tr>
+              </tbody>
+            </table>
+            <span id="val-hz" style="display:none">0.0 Гц</span>
           </div>
         </div>
       </div>
@@ -82,7 +102,7 @@
     <!-- Нижняя секция: Реестр объектов -->
     <div class="table-section">
       <div class="table-header-bar">
-        <span class="table-title">ОБНАРУЖЕННЫЕ ОБЪЕКТЫ В ЗОНЕ КОНТРОЛЯ (<span id="count-obstacles">0</span>)</span>
+        <span class="table-title">Обнаруженные объекты в зоне контроля (<span id="count-obstacles">0</span>)</span>
       </div>
       <div class="table-container">
         <table class="grid-table">
@@ -95,7 +115,7 @@
               <th style="width: 100px;">Высота Z</th>
               <th style="width: 140px;">Габариты (Ш×В)</th>
               <th style="width: 90px;">Точек</th>
-              <th style="width: 130px;">Статус угрозы</th>
+              <th style="width: 130px;">Статус</th>
             </tr>
           </thead>
           <tbody id="table-body-obstacles">
@@ -108,7 +128,7 @@
     </div>
   </div>
 
-  <script src="webgl_view.js"></script>
-  <script src="app.js"></script>
+  <script src="webgl_view.js?v=20260928_v4"></script>
+  <script src="app.js?v=20260928_v4"></script>
 </body>
 </html>

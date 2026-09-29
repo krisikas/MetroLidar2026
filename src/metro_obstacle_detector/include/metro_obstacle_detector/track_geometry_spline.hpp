@@ -38,8 +38,11 @@ public:
     float & out_s, float & out_u, float & out_v,
     size_t & out_closest_idx) const;
 
+  void reset();
+
 private:
   SplineTrackerConfig config_;
+  std::vector<FrenetWaypoint> prev_waypoints_;
 };
 
 } // namespace metro_obstacle_detector

@@ -63,7 +63,7 @@ class DashboardState:
         self.braking_distance = 0.0     # m
         self.alert_status = 0           # 0: CLEAR, 1: ADVISORY, 2: WARNING, 3: EMERGENCY_BRAKE
         self.emergency_brake = False
-        self.operational_mode = "АВТОНОМНЫЙ РЕЖИМ"
+        self.operational_mode = "Автономный режим"
         self.obstacles = []
         self.path_points = []
         self.cloud_points = []
@@ -126,8 +126,8 @@ class DashboardState:
                 for f in msg.fields:
                     if f.name == 'x': ox = f.offset
                     elif f.name == 'y': oy = f.offset
-                    elif f.name == 'z': oz = f.offset
-                stride = max(1, n_pts // 500)
+                # Выборка ~14000 точек для плотного, детального и четкого отображения тоннеля и объектов
+                stride = max(1, n_pts // 14000)
                 pts = []
                 data_len = len(data)
                 for i in range(0, n_pts, stride):
@@ -141,6 +141,12 @@ class DashboardState:
                                 pts.append([round(x, 2), round(y, 2), round(z, 2)])
                 with self.lock:
                     self.cloud_points = pts
+                    if n_pts > 0:
+                        self.telemetry['input_pts'] = n_pts
+                now = time.time()
+                if now - getattr(self, '_last_lidar_notify', 0.0) >= 0.06:
+                    self._last_lidar_notify = now
+                    self._notify_listeners()
         except Exception:
             pass
 
@@ -162,6 +168,7 @@ class DashboardState:
                         round(float(p.pose.position.z), 2)
                     ])
             self.path_points = pts
+        self._notify_listeners()
 
     def update_telemetry(self, msg: SystemHealth):
         self.rate_telemetry.tick()
@@ -233,6 +240,12 @@ class DashboardRequestHandler(SimpleHTTPRequestHandler):
     def __init__(self, *args, web_dir=None, **kwargs):
         self.web_dir = web_dir
         super().__init__(*args, directory=web_dir, **kwargs)
+
+    def end_headers(self):
+        self.send_header('Cache-Control', 'no-cache, no-store, must-revalidate, max-age=0')
+        self.send_header('Pragma', 'no-cache')
+        self.send_header('Expires', '0')
+        super().end_headers()
 
     def do_GET(self):
         parsed = urlparse(self.path)
