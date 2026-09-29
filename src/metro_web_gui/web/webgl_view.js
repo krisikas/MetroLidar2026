@@ -13,7 +13,7 @@ class MetroWebGLViewer {
       return;
     }
 
-    this.cameraMode = 'fpv'; // 'fpv' or 'orbit'
+    this.cameraMode = 'orbit'; // 'orbit' by default for interactive 3D inspection
     this.orbitAngles = { yaw: -1.57, pitch: 0.35, dist: 28.0, target: [0, -15, 0] };
     this.showRails = true;
     this.showEnvelope = true;
@@ -59,9 +59,7 @@ class MetroWebGLViewer {
   }
 
   resetCamera() {
-    if (this.cameraMode === 'orbit') {
-      this.orbitAngles = { yaw: -1.57, pitch: 0.35, dist: 28.0, target: [0, -15, 0] };
-    }
+    this.orbitAngles = { yaw: -1.57, pitch: 0.35, dist: 28.0, target: [0, -15, 0] };
   }
 
   updateState(data) {
@@ -88,16 +86,26 @@ class MetroWebGLViewer {
       varying vec4 vColor;
       void main() {
         gl_Position = uMVP * vec4(aPosition, 1.0);
-        gl_PointSize = 2.0;
+        // Оптимальный размер дисков точек лидара
+        gl_PointSize = clamp(360.0 / gl_Position.w, 3.5, 14.0);
         vColor = aColor;
       }
     `;
 
     const fsSource = `
       precision mediump float;
+      uniform float uIsPoint;
       varying vec4 vColor;
       void main() {
-        gl_FragColor = vColor;
+        if (uIsPoint > 0.5) {
+          vec2 coord = gl_PointCoord - vec2(0.5);
+          float dist = length(coord);
+          if (dist > 0.5) discard;
+          float alpha = smoothstep(0.5, 0.40, dist) * vColor.a;
+          gl_FragColor = vec4(vColor.rgb, alpha);
+        } else {
+          gl_FragColor = vColor;
+        }
       }
     `;
 
@@ -117,6 +125,7 @@ class MetroWebGLViewer {
     this.aPosition = gl.getAttribLocation(this.program, 'aPosition');
     this.aColor = gl.getAttribLocation(this.program, 'aColor');
     this.uMVP = gl.getUniformLocation(this.program, 'uMVP');
+    this.uIsPoint = gl.getUniformLocation(this.program, 'uIsPoint');
   }
 
   initBuffers() {
@@ -127,15 +136,26 @@ class MetroWebGLViewer {
 
   initInteractions() {
     let isDragging = false;
+    let dragButton = 0; // 0: левая, 1: средняя, 2: правая
     let lastX = 0, lastY = 0;
+
+    this.canvas.style.cursor = 'grab';
+
+    // Отключаем стандартное контекстное меню браузера для работы перемещения ПКМ
+    this.canvas.addEventListener('contextmenu', (e) => e.preventDefault());
 
     this.canvas.addEventListener('mousedown', (e) => {
       isDragging = true;
+      dragButton = e.button;
       lastX = e.clientX;
       lastY = e.clientY;
+      this.canvas.style.cursor = (e.button === 2) ? 'crosshair' : 'grabbing';
     });
 
-    window.addEventListener('mouseup', () => { isDragging = false; });
+    window.addEventListener('mouseup', () => {
+      isDragging = false;
+      if (this.canvas) this.canvas.style.cursor = 'grab';
+    });
 
     window.addEventListener('mousemove', (e) => {
       if (!isDragging) return;
@@ -144,18 +164,48 @@ class MetroWebGLViewer {
       lastX = e.clientX;
       lastY = e.clientY;
 
+      // ПКМ (кнопка 2) = Вращение (крутиться).
+      // ЛКМ (кнопка 0) и СКМ (кнопка 1) = Перемещение (панорамирование).
+      const isRotate = (dragButton === 2) || (dragButton === 0 && (e.altKey || e.ctrlKey));
+
       if (this.cameraMode === 'orbit') {
-        this.orbitAngles.yaw += dx * 0.008;
-        this.orbitAngles.pitch = Math.max(-0.2, Math.min(1.4, this.orbitAngles.pitch + dy * 0.008));
-      } else {
-        this.orbitAngles.yaw += dx * 0.003;
+        if (isRotate) {
+          // Орбитальное вращение (ПКМ)
+          this.orbitAngles.yaw += dx * 0.008;
+          this.orbitAngles.pitch = Math.max(-0.35, Math.min(1.45, this.orbitAngles.pitch + dy * 0.008));
+        } else {
+          // Четкое, отзывчивое панорамирование (ЛКМ)
+          const yaw = this.orbitAngles.yaw;
+          const pitch = this.orbitAngles.pitch;
+          const d = this.orbitAngles.dist;
+
+          const cosY = Math.cos(yaw);
+          const sinY = Math.sin(yaw);
+          const cosP = Math.cos(pitch);
+          const sinP = Math.sin(pitch);
+
+          // Базис камеры в мировых координатах
+          const rx = -cosY;
+          const ry = sinY;
+          const ux = -sinP * sinY;
+          const uy = -sinP * cosY;
+          const uz = cosP;
+
+          // Быстрый, заметный шаг перемещения
+          const panFactor = Math.max(0.08, d * 0.005);
+
+          this.orbitAngles.target[0] -= (rx * dx + ux * (-dy)) * panFactor;
+          this.orbitAngles.target[1] -= (ry * dx + uy * (-dy)) * panFactor;
+          this.orbitAngles.target[2] -= uz * (-dy) * panFactor;
+        }
       }
+      // В режиме FPV (вид из кабины) камера жестко зафиксирована на месте машиниста
     });
 
     this.canvas.addEventListener('wheel', (e) => {
       e.preventDefault();
       if (this.cameraMode === 'orbit') {
-        this.orbitAngles.dist = Math.max(5.0, Math.min(120.0, this.orbitAngles.dist + e.deltaY * 0.05));
+        this.orbitAngles.dist = Math.max(3.0, Math.min(150.0, this.orbitAngles.dist + e.deltaY * 0.06));
       }
     }, { passive: false });
   }
@@ -370,14 +420,36 @@ class MetroWebGLViewer {
       return new Float32Array(0);
     }
     const pts = [];
+    const obsList = this.obstacles || [];
+
     for (const p of this.cloudPoints) {
       const x = p[0], y = p[1], z = p[2];
-      // Height-based elevation coloring
-      const t = Math.max(0.0, Math.min(1.0, (z + 2.0) / 4.0));
-      const r = 0.20 + 0.60 * t;
-      const g = 0.40 + 0.40 * (1.0 - Math.abs(t - 0.5) * 2.0);
-      const b = 0.70 - 0.50 * t;
-      pts.push(x, y, z, r, g, b, 0.75);
+
+      // Проверка на принадлежность или близость к обнаруженному препятствию
+      let isNearObstacle = false;
+      for (const obs of obsList) {
+        const hx = Math.max(0.4, Number(obs.size_x) * 0.5 + 0.35);
+        const hy = Math.max(0.6, Number(obs.size_y) * 0.5 + 0.50);
+        const hz = Math.max(0.4, Number(obs.size_z) * 0.5 + 0.35);
+        if (Math.abs(y - Number(obs.y)) <= hy &&
+            Math.abs(x - Number(obs.x)) <= hx &&
+            Math.abs(z - Number(obs.z)) <= hz) {
+          isNearObstacle = true;
+          break;
+        }
+      }
+
+      if (isNearObstacle) {
+        // Ярко-оранжевый/красный цвет для точек препятствий
+        pts.push(x, y, z, 1.0, 0.25, 0.20, 1.0);
+      } else {
+        // Исходная естественная расцветка по высоте (высотный спектральный градиент)
+        const t = Math.max(0.0, Math.min(1.0, (z + 2.0) / 4.0));
+        const r = 0.20 + 0.60 * t;
+        const g = 0.40 + 0.40 * (1.0 - Math.abs(t - 0.5) * 2.0);
+        const b = 0.70 - 0.50 * t;
+        pts.push(x, y, z, r, g, b, 0.80);
+      }
     }
     return new Float32Array(pts);
   }
@@ -453,6 +525,7 @@ class MetroWebGLViewer {
     }
 
     if (this.lineVertexCount > 0) {
+      gl.uniform1f(this.uIsPoint, 0.0);
       gl.bindBuffer(gl.ARRAY_BUFFER, this.lineBuffer);
       gl.enableVertexAttribArray(this.aPosition);
       gl.vertexAttribPointer(this.aPosition, 3, gl.FLOAT, false, stride, 0);
@@ -474,6 +547,7 @@ class MetroWebGLViewer {
     }
 
     if (this.showPoints && this.pointVertexCount > 0) {
+      gl.uniform1f(this.uIsPoint, 1.0);
       gl.bindBuffer(gl.ARRAY_BUFFER, this.pointBuffer);
       gl.enableVertexAttribArray(this.aPosition);
       gl.vertexAttribPointer(this.aPosition, 3, gl.FLOAT, false, stride, 0);

@@ -61,6 +61,7 @@ private:
 
   std::vector<Point3D> points_scratch_;
   std::chrono::steady_clock::time_point last_frame_time_;
+  uint64_t last_stamp_ns_{0};
   bool first_frame_{true};
 };
 

@@ -140,6 +140,11 @@ void SpecializedDetectors::detect_bulk_obstacles(
     // Infrastructure exclusion
     if (is_infrastructure(u, v)) continue;
 
+    // Filter points too close to tunnel perimeter walls
+    const auto & wp = waypoints[wp_idx];
+    if (wp.left_wall > 1.20f && u <= -(wp.left_wall - 0.25f)) continue;
+    if (wp.right_wall > 1.20f && u >= (wp.right_wall - 0.25f)) continue;
+
     const float sdf = envelope_sdf_.compute_signed_distance(u, v);
     // ONLY keep points strictly inside clearance envelope
     if (sdf <= -0.02f) {

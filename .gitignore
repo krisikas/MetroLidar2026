@@ -1,6 +1,61 @@
+# ==============================================================================
+# MetroLidar2026: Git Ignore Rules
+# ==============================================================================
+
+# Compiled Python artifacts & Bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+
+# ROS 2 & Colcon build artifacts
 build/
 install/
 log/
+.colcon/
+
+# C / C++ build artifacts
+*.o
+*.obj
+*.dylib
+*.a
+
+# ROS 2 Datasets & Rosbags (keep directory structure and README)
 archive/
-.vscode/
+bags/*
+!bags/.gitkeep
+!bags/README.md
+
+# Large dataset archives & raw dumps
+*.tar.gz
+*.tar
+*.zst
+*.db3
+*.mcap
+
+# Operating System specific
 .DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# IDE & Editor configurations
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+*.bak
+
+# Virtual Environments & Scratch work
+.venv/
+venv/
+ENV/
+env/
+scratch/
+
+PROJECT.md

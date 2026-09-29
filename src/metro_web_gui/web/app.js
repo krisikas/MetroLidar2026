@@ -9,51 +9,49 @@ document.addEventListener('DOMContentLoaded', () => {
   // Элементы управления камерой
   const btnCamFpv = document.getElementById('btn-cam-fpv');
   const btnCamOrbit = document.getElementById('btn-cam-orbit');
-  const btnCamReset = document.getElementById('btn-cam-reset');
 
   // Слои отображения
   const chkRails = document.getElementById('chk-rails');
   const chkEnvelope = document.getElementById('chk-envelope');
   const chkPoints = document.getElementById('chk-points');
 
-  // Верхняя полоса телеметрии
-  const valDds = document.getElementById('val-dds');
-  const valHz = document.getElementById('val-hz');
-  const valCalcTime = document.getElementById('val-calc-time');
-  const valPointsCount = document.getElementById('val-points-count');
+  // Безопасные функции установки текстовых значений и классов
+  function setSafeText(id, text, className) {
+    const el = document.getElementById(id);
+    if (el) {
+      if (text !== undefined && text !== null) el.textContent = text;
+      if (className !== undefined) el.className = className;
+    }
+  }
 
-  // Информационный блок состояния
-  const hudStatusText = document.getElementById('hud-status-text');
-  const dispTrainSpeed = document.getElementById('disp-train-speed');
-  const dispBrakingDistance = document.getElementById('disp-braking-distance');
-  const dispClosestObstacle = document.getElementById('disp-closest-obstacle');
-  const dispTimeToCollision = document.getElementById('disp-time-to-collision');
-
-  // Таблица препятствий
-  const countObstacles = document.getElementById('count-obstacles');
-  const tableBodyObstacles = document.getElementById('table-body-obstacles');
+  function setSafeHtml(id, html) {
+    const el = document.getElementById(id);
+    if (el && html !== undefined && html !== null) {
+      el.innerHTML = html;
+    }
+  }
 
   // Переключение режимов камеры
-  btnCamFpv.addEventListener('click', () => {
-    viewer.setCameraMode('fpv');
-    btnCamFpv.classList.add('active');
-    btnCamOrbit.classList.remove('active');
-  });
+  if (btnCamFpv) {
+    btnCamFpv.addEventListener('click', () => {
+      viewer.setCameraMode('fpv');
+      btnCamFpv.classList.add('active');
+      if (btnCamOrbit) btnCamOrbit.classList.remove('active');
+    });
+  }
 
-  btnCamOrbit.addEventListener('click', () => {
-    viewer.setCameraMode('orbit');
-    btnCamOrbit.classList.add('active');
-    btnCamFpv.classList.remove('active');
-  });
-
-  btnCamReset.addEventListener('click', () => {
-    viewer.resetCamera();
-  });
+  if (btnCamOrbit) {
+    btnCamOrbit.addEventListener('click', () => {
+      viewer.setCameraMode('orbit');
+      btnCamOrbit.classList.add('active');
+      if (btnCamFpv) btnCamFpv.classList.remove('active');
+    });
+  }
 
   // Переключение видимости слоев
-  chkRails.addEventListener('change', (e) => { viewer.showRails = e.target.checked; });
-  chkEnvelope.addEventListener('change', (e) => { viewer.showEnvelope = e.target.checked; });
-  chkPoints.addEventListener('change', (e) => { viewer.showPoints = e.target.checked; });
+  if (chkRails) chkRails.addEventListener('change', (e) => { viewer.showRails = e.target.checked; });
+  if (chkEnvelope) chkEnvelope.addEventListener('change', (e) => { viewer.showEnvelope = e.target.checked; });
+  if (chkPoints) chkPoints.addEventListener('change', (e) => { viewer.showPoints = e.target.checked; });
 
   const CATEGORIES = {
     0: 'Неопределено',
@@ -66,113 +64,138 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!data) return;
 
     // 1. Обновление 3D сцены
-    viewer.updateState(data);
-
-    // 2. Статус связи и телеметрия
-    const ddsActive = Boolean(data.dds_active);
-    if (ddsActive) {
-      valDds.textContent = 'АКТИВНА';
-      valDds.className = 'cell-value online';
-    } else {
-      valDds.textContent = 'ОЖИДАНИЕ';
-      valDds.className = 'cell-value';
+    try {
+      viewer.updateState(data);
+    } catch (e) {
+      console.warn('Viewer update error:', e);
     }
 
-    if (data.topic_rates) {
-      valHz.textContent = `${(data.topic_rates.lidar_hz || 0.0).toFixed(1)} Гц`;
+    // 2. Статус связи и раздельные частоты системы
+    try {
+      const ddsActive = Boolean(data.dds_active);
+      if (ddsActive) {
+        setSafeText('val-dds', 'Активна', 'cell-value online');
+      } else {
+        setSafeText('val-dds', 'Ожидание', 'cell-value');
+      }
+
+      if (data.topic_rates) {
+        setSafeText('val-hz-lidar', `${(data.topic_rates.lidar_hz || 0.0).toFixed(1)} Гц`);
+        setSafeText('val-hz-path', `${(data.topic_rates.path_hz || 0.0).toFixed(1)} Гц`);
+        setSafeText('val-hz-obs', `${(data.topic_rates.obstacles_hz || 0.0).toFixed(1)} Гц`);
+      }
+
+      if (data.telemetry) {
+        setSafeText('val-calc-time', `${(data.telemetry.latency_ms || 0.0).toFixed(1)} мс`);
+        setSafeText('val-points-count', (data.telemetry.input_pts || 0).toLocaleString());
+      }
+    } catch (e) {
+      console.warn('Telemetry update error:', e);
     }
 
-    if (data.telemetry) {
-      valCalcTime.textContent = `${(data.telemetry.latency_ms || 0.0).toFixed(1)} мс`;
-      valPointsCount.textContent = (data.telemetry.input_pts || 0).toLocaleString();
+    // 3. Параметры движения и расчетная скорость по лидару
+    let speedMps = 0.0;
+    let brakeDist = 0.0;
+    try {
+      speedMps = Number(data.train_speed || 0.0);
+      const speedKmh = Number(data.train_speed_kmh || (speedMps * 3.6));
+
+      if (speedMps < 0.20) {
+        setSafeText('disp-train-speed', '0.0 км/ч (состав остановлен)');
+      } else {
+        setSafeText('disp-train-speed', `${speedKmh.toFixed(1)} км/ч (${speedMps.toFixed(2)} м/с, расчет по лидару)`);
+      }
+
+      brakeDist = Number(data.braking_distance || 0.0);
+      if (speedMps < 0.20 || brakeDist <= 0.0) {
+        setSafeText('disp-braking-distance', '0.0 м (состав остановлен)');
+      } else {
+        setSafeText('disp-braking-distance', `${brakeDist.toFixed(1)} м`);
+      }
+    } catch (e) {
+      console.warn('Speed telemetry error:', e);
     }
 
-    // 3. Параметры движения и торможения
-    const speedMps = Number(data.train_speed || 0.0);
-    const speedKmh = Number(data.train_speed_kmh || (speedMps * 3.6));
-
-    if (speedMps < 0.20) {
-      dispTrainSpeed.textContent = '0.0 км/ч (состав остановлен)';
-    } else {
-      dispTrainSpeed.textContent = `${speedKmh.toFixed(1)} км/ч (${speedMps.toFixed(2)} м/с)`;
-    }
-
-    const brakeDist = Number(data.braking_distance || 0.0);
-    if (speedMps < 0.20 || brakeDist <= 0.0) {
-      dispBrakingDistance.textContent = '0.0 м (состав остановлен)';
-    } else {
-      dispBrakingDistance.textContent = `${brakeDist.toFixed(1)} м`;
-    }
-
-    // 4. Анализ препятствий и статус пути
+    // 4. Анализ препятствий и статус пути в HUD
     const obstacles = data.obstacles || [];
-    countObstacles.textContent = obstacles.length;
+    try {
+      setSafeText('count-obstacles', obstacles.length);
 
-    let closest = null;
-    if (obstacles.length > 0) {
-      closest = obstacles.reduce((min, o) => (o.distance < min.distance ? o : min), obstacles[0]);
-    }
-
-    hudStatusText.className = 'hud-title';
-
-    if (closest) {
-      const dist = Number(closest.distance);
-      const isCritical = dist <= brakeDist || closest.threat === 3 || (speedMps > 1.0 && dist < 40.0);
-
-      if (isCritical) {
-        hudStatusText.classList.add('danger');
-        hudStatusText.textContent = `ОПАСНОСТЬ: ОБЪЕКТ НА ${dist.toFixed(1)} М`;
-      } else {
-        hudStatusText.classList.add('warning');
-        hudStatusText.textContent = `ВНИМАНИЕ: ОБЪЕКТ НА ${dist.toFixed(1)} М`;
+      let closest = null;
+      if (obstacles.length > 0) {
+        closest = obstacles.reduce((min, o) => (o.distance < min.distance ? o : min), obstacles[0]);
       }
 
-      dispClosestObstacle.textContent = `${dist.toFixed(1)} м`;
+      const hudStatusText = document.getElementById('hud-status-text');
+      if (hudStatusText) {
+        hudStatusText.className = 'hud-title';
 
-      const ttc = Number(data.ttc);
-      if (speedMps >= 0.50 && ttc > 0 && ttc < 300) {
-        dispTimeToCollision.textContent = `${ttc.toFixed(1)} с`;
-      } else {
-        dispTimeToCollision.textContent = '— (состав неподвижен)';
-      }
-    } else {
-      hudStatusText.textContent = 'ПУТЬ СВОБОДЕН';
-      dispClosestObstacle.textContent = '—';
-      dispTimeToCollision.textContent = '—';
-    }
+        if (closest) {
+          const dist = Number(closest.distance);
+          const isCritical = dist <= brakeDist || closest.threat === 3 || (speedMps > 1.0 && dist < 40.0);
 
-    // 5. Полноразмерная таблица препятствий
-    if (obstacles.length === 0) {
-      tableBodyObstacles.innerHTML = '<tr><td colspan="8" class="row-empty">Объектов в габарите пути не обнаружено</td></tr>';
-    } else {
-      let rows = '';
-      for (const obs of obstacles) {
-        let tag = '<span class="status-tag tag-info">ИНФО</span>';
-        if (obs.threat === 3 || obs.distance <= brakeDist) {
-          tag = '<span class="status-tag tag-danger">ОПАСНОСТЬ</span>';
-        } else if (obs.threat === 2 || obs.threat === 1) {
-          tag = '<span class="status-tag tag-warning">ВНИМАНИЕ</span>';
+          if (isCritical) {
+            hudStatusText.classList.add('danger');
+            hudStatusText.textContent = `Опасность: объект на ${dist.toFixed(1)} м`;
+          } else {
+            hudStatusText.classList.add('warning');
+            hudStatusText.textContent = `Внимание: объект на ${dist.toFixed(1)} м`;
+          }
+
+          setSafeText('disp-closest-obstacle', `${dist.toFixed(1)} м`);
+
+          const ttc = Number(data.ttc);
+          if (speedMps >= 0.50 && ttc > 0 && ttc < 300) {
+            setSafeText('disp-time-to-collision', `${ttc.toFixed(1)} с`);
+          } else {
+            setSafeText('disp-time-to-collision', '— (состав неподвижен)');
+          }
+        } else {
+          hudStatusText.textContent = 'Путь свободен';
+          setSafeText('disp-closest-obstacle', '—');
+          setSafeText('disp-time-to-collision', '—');
         }
-
-        const cat = CATEGORIES[obs.category] || 'Объект';
-        const posX = `${obs.x >= 0 ? '+' : ''}${Number(obs.x).toFixed(2)}`;
-        const posZ = Number(obs.z).toFixed(2);
-        const dims = `${Number(obs.size_x).toFixed(2)} × ${Number(obs.size_z).toFixed(2)}`;
-
-        rows += `
-          <tr>
-            <td>#${obs.id}</td>
-            <td>${cat}</td>
-            <td>${Number(obs.distance).toFixed(1)} м</td>
-            <td>${posX}</td>
-            <td>${posZ}</td>
-            <td>${dims}</td>
-            <td>${obs.pts || 1}</td>
-            <td>${tag}</td>
-          </tr>
-        `;
       }
-      tableBodyObstacles.innerHTML = rows;
+    } catch (e) {
+      console.warn('HUD update error:', e);
+    }
+
+    // 5. Полноразмерная таблица подтвержденных препятствий
+    try {
+      if (obstacles.length === 0) {
+        setSafeHtml('table-body-obstacles', '<tr><td colspan="8" class="row-empty">Объектов в габарите пути не обнаружено</td></tr>');
+      } else {
+        let rows = '';
+        for (const obs of obstacles) {
+          let tag = '<span class="status-tag tag-info">Инфо</span>';
+          if (obs.threat === 3 || obs.distance <= brakeDist) {
+            tag = '<span class="status-tag tag-danger">Опасность</span>';
+          } else if (obs.threat === 2 || obs.threat === 1) {
+            tag = '<span class="status-tag tag-warning">Внимание</span>';
+          }
+
+          const cat = CATEGORIES[obs.category] || 'Объект';
+          const posX = `${obs.x >= 0 ? '+' : ''}${Number(obs.x).toFixed(2)}`;
+          const posZ = Number(obs.z).toFixed(2);
+          const dims = `${Number(obs.size_x).toFixed(2)} × ${Number(obs.size_z).toFixed(2)}`;
+
+          rows += `
+            <tr>
+              <td>#${obs.id}</td>
+              <td>${cat}</td>
+              <td>${Number(obs.distance).toFixed(1)} м</td>
+              <td>${posX}</td>
+              <td>${posZ}</td>
+              <td>${dims}</td>
+              <td>${obs.pts || 1}</td>
+              <td>${tag}</td>
+            </tr>
+          `;
+        }
+        setSafeHtml('table-body-obstacles', rows);
+      }
+    } catch (e) {
+      console.warn('Obstacle table update error:', e);
     }
   }
 
@@ -185,15 +208,13 @@ document.addEventListener('DOMContentLoaded', () => {
       try { es.close(); } catch (e) {}
     }
 
-    valDds.textContent = 'ПОДКЛЮЧЕНИЕ...';
-    valDds.className = 'cell-value';
+    setSafeText('val-dds', 'Подключение...', 'cell-value');
 
     try {
       es = new EventSource('/events');
 
       es.onopen = () => {
-        valDds.textContent = 'АКТИВНА';
-        valDds.className = 'cell-value online';
+        setSafeText('val-dds', 'Активна', 'cell-value online');
       };
 
       es.onmessage = (event) => {

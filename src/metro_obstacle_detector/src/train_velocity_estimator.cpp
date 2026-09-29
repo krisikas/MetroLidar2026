@@ -20,12 +20,14 @@ void TrainVelocityEstimator::set_config(const VelocityEstimatorConfig & config)
   prev_histogram_.assign(num_bins_, 0.0f);
   curr_histogram_.assign(num_bins_, 0.0f);
   has_prev_histogram_ = false;
+  is_initialized_ = false;
   current_velocity_ = config_.default_speed;
 }
 
 void TrainVelocityEstimator::reset()
 {
   has_prev_histogram_ = false;
+  is_initialized_ = false;
   current_velocity_ = config_.default_speed;
   std::fill(prev_histogram_.begin(), prev_histogram_.end(), 0.0f);
 }
@@ -141,12 +143,27 @@ float TrainVelocityEstimator::estimate_velocity(const std::vector<Point3D> & poi
     }
     raw_v = std::clamp(raw_v, 0.0f, config_.max_train_speed);
 
-    // Rate-of-change (acceleration) limiter
-    const float max_dv = config_.max_train_accel * dt;
-    const float clamped_v = std::clamp(raw_v, current_velocity_ - max_dv, current_velocity_ + max_dv);
+    if (!is_initialized_ && best_corr >= 0.55f && raw_v >= 0.20f) {
+      // Быстрая инициализация скорости при первом надежном захвате корреляции
+      current_velocity_ = raw_v;
+      is_initialized_ = true;
+    } else {
+      // Ограничитель ускорения/замедления для подавления одиночных скачков
+      const float max_dv = config_.max_train_accel * dt;
+      const float clamped_v = std::clamp(raw_v, current_velocity_ - max_dv, current_velocity_ + max_dv);
 
-    // Exponential smoothing filter
-    current_velocity_ = config_.ema_alpha * clamped_v + (1.0f - config_.ema_alpha) * current_velocity_;
+      // Экспоненциальное сглаживание
+      current_velocity_ = config_.ema_alpha * clamped_v + (1.0f - config_.ema_alpha) * current_velocity_;
+      if (current_velocity_ >= 0.30f) {
+        is_initialized_ = true;
+      }
+    }
+  } else if (is_initialized_ && current_velocity_ > 0.30f) {
+    // Плавный выбег при кратковременной потере корреляции (выброс датчика)
+    current_velocity_ *= 0.98f;
+    if (current_velocity_ < 0.20f) {
+      current_velocity_ = 0.0f;
+    }
   }
 
   prev_histogram_ = curr_histogram_;

@@ -18,8 +18,8 @@ ObstacleDetectorNode::ObstacleDetectorNode(const rclcpp::NodeOptions & options)
   this->declare_parameter<bool>("use_gpu", false);
   this->declare_parameter<bool>("publish_markers", true);
   this->declare_parameter<bool>("publish_envelope", true);
-  this->declare_parameter<double>("train_speed_mps", 15.0);
-  this->declare_parameter<double>("lookahead_distance", 250.0);
+  this->declare_parameter<double>("train_speed_mps", 0.0);
+  this->declare_parameter<double>("lookahead_distance", 150.0);
   this->declare_parameter<double>("min_distance", 2.0);
   this->declare_parameter<double>("base_step", 2.0);
   this->declare_parameter<double>("min_curve_radius", 160.0);

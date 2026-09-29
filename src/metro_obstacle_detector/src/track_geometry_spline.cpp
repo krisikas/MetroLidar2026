@@ -16,6 +16,11 @@ void TrackGeometrySpline::set_config(const SplineTrackerConfig & config)
   config_ = config;
 }
 
+void TrackGeometrySpline::reset()
+{
+  prev_waypoints_.clear();
+}
+
 void TrackGeometrySpline::build_trajectory(
   const std::vector<Point3D> & points,
   const std::vector<DualRailMeasurement> & /* rail_measurements */,
@@ -152,9 +157,9 @@ void TrackGeometrySpline::build_trajectory(
 
           // Tunnel walls: vertical span above floor
           if (pz >= pred_z + 0.50f && pz <= pred_z + 3.50f) {
-            if (u >= -4.5f && u <= -1.60f) {
+            if (u >= -4.5f && u <= -1.20f) {
               left_walls.push_back(u);
-            } else if (u >= 1.60f && u <= 4.5f) {
+            } else if (u >= 1.20f && u <= 4.5f) {
               right_walls.push_back(u);
             }
           }
@@ -208,8 +213,21 @@ void TrackGeometrySpline::build_trajectory(
       // In single-track tunnel: follow centerline of tube (tracks curves cleanly)
       if (has_l && has_r) {
         const float w = r_bound - l_bound;
-        if (w >= 3.4f && w <= 5.6f) {
+        if (w >= 3.4f && w <= 5.8f) {
           meas_u = 0.5f * (l_bound + r_bound);
+          nominal_half_w = 0.5f * w;
+          valid_wall = true;
+        }
+      } else if (has_l && !has_r) {
+        // Only left wall visible (e.g. curve right occluding inner wall)
+        if (l_bound >= -3.6f && l_bound <= -1.60f) {
+          meas_u = l_bound + nominal_half_w;
+          valid_wall = true;
+        }
+      } else if (has_r && !has_l) {
+        // Only right wall visible (e.g. curve left occluding inner wall)
+        if (r_bound >= 1.60f && r_bound <= 3.6f) {
+          meas_u = r_bound - nominal_half_w;
           valid_wall = true;
         }
       }
@@ -219,24 +237,29 @@ void TrackGeometrySpline::build_trajectory(
     float updated_y = pred_y;
 
     if (valid_wall) {
-      const float range_conf = (dist < 50.0f) ? 1.0f : std::max(0.15f, 1.0f - (dist - 50.0f) / 100.0f);
-      const float corr_gain = 0.45f * range_conf;
+      // Prevent trajectory from drifting closer than 1.80m to either tunnel wall
+      if (has_l && meas_u < (l_bound + 1.80f)) meas_u = l_bound + 1.80f;
+      if (has_r && meas_u > (r_bound - 1.80f)) meas_u = r_bound - 1.80f;
+
+      const float range_conf = (dist < 80.0f) ? 1.0f : std::max(0.35f, 1.0f - (dist - 80.0f) / 100.0f);
+      const float corr_gain = 0.50f * range_conf;
       updated_x = pred_x + corr_gain * meas_u * cos_h;
       updated_y = pred_y + corr_gain * meas_u * sin_h;
 
-      const float dtheta = std::clamp((meas_u / 12.0f) * range_conf, -actual_ds / min_rad, actual_ds / min_rad);
-      heading = std::clamp(pred_heading + dtheta, -0.45f, 0.45f);
-      if (dist < 75.0f) {
-        const float dkappa = (2.0f * meas_u / (28.0f * 28.0f)) * range_conf;
-        curvature = std::clamp(curvature * 0.985f + dkappa, -max_curv, max_curv);
-      } else {
-        curvature *= 0.96f;
-      }
+      const float dtheta = std::clamp((meas_u / 10.0f) * range_conf, -actual_ds / min_rad, actual_ds / min_rad);
+      heading = std::clamp(pred_heading + dtheta, -0.60f, 0.60f);
+      const float dkappa = (2.0f * meas_u / (25.0f * 25.0f)) * range_conf;
+      curvature = std::clamp(curvature + dkappa, -max_curv, max_curv);
     } else {
       updated_x = pred_x;
       updated_y = pred_y;
-      heading = (is_double_track ? (heading * 0.85f) : (pred_heading * 0.85f));
-      curvature *= 0.85f;
+      if (is_double_track) {
+        heading *= 0.90f;
+        curvature = 0.0f;
+      } else {
+        // В кривой при разрежении точек сохраняем расчетную дугу окружности
+        heading = pred_heading;
+      }
     }
 
     FrenetWaypoint wp;
@@ -260,12 +283,41 @@ void TrackGeometrySpline::build_trajectory(
     dist += actual_ds;
   }
 
-  // Smooth elevation profile
+  // 1. Smooth elevation profile (Z)
   if (out_waypoints.size() >= 3) {
     for (size_t i = 1; i + 1 < out_waypoints.size(); ++i) {
       out_waypoints[i].z = 0.25f * out_waypoints[i - 1].z +
                            0.50f * out_waypoints[i].z +
                            0.25f * out_waypoints[i + 1].z;
+    }
+  }
+
+  // 2. Smooth horizontal profile (X and Y) with 5-point Gaussian kernel to eliminate sharp kinks
+  if (out_waypoints.size() >= 5) {
+    std::vector<float> smooth_x(out_waypoints.size());
+    std::vector<float> smooth_y(out_waypoints.size());
+    for (size_t i = 0; i < out_waypoints.size(); ++i) {
+      if (i >= 2 && i + 2 < out_waypoints.size()) {
+        smooth_x[i] = 0.08f * out_waypoints[i - 2].x + 0.25f * out_waypoints[i - 1].x +
+                      0.34f * out_waypoints[i].x +
+                      0.25f * out_waypoints[i + 1].x + 0.08f * out_waypoints[i + 2].x;
+        smooth_y[i] = 0.08f * out_waypoints[i - 2].y + 0.25f * out_waypoints[i - 1].y +
+                      0.34f * out_waypoints[i].y +
+                      0.25f * out_waypoints[i + 1].y + 0.08f * out_waypoints[i + 2].y;
+      } else if (i == 1) {
+        smooth_x[i] = 0.25f * out_waypoints[0].x + 0.50f * out_waypoints[1].x + 0.25f * out_waypoints[2].x;
+        smooth_y[i] = 0.25f * out_waypoints[0].y + 0.50f * out_waypoints[1].y + 0.25f * out_waypoints[2].y;
+      } else if (i + 2 == out_waypoints.size()) {
+        smooth_x[i] = 0.25f * out_waypoints[i - 1].x + 0.50f * out_waypoints[i].x + 0.25f * out_waypoints[i + 1].x;
+        smooth_y[i] = 0.25f * out_waypoints[i - 1].y + 0.50f * out_waypoints[i].y + 0.25f * out_waypoints[i + 1].y;
+      } else {
+        smooth_x[i] = out_waypoints[i].x;
+        smooth_y[i] = out_waypoints[i].y;
+      }
+    }
+    for (size_t i = 1; i < out_waypoints.size(); ++i) {
+      out_waypoints[i].x = smooth_x[i];
+      out_waypoints[i].y = smooth_y[i];
     }
   }
 
@@ -292,6 +344,30 @@ void TrackGeometrySpline::build_trajectory(
     out_waypoints[i].yaw = std::atan2(dx, -dy);
     out_waypoints[i].pitch = std::atan2(dz, -dy);
   }
+
+  // Multi-frame temporal smoothing: eliminate single-frame jitter while avoiding motion lag
+  if (!prev_waypoints_.empty() && prev_waypoints_.size() == out_waypoints.size()) {
+    const float alpha_pos = 0.80f; // 80% current scan (avoids backward lag during train travel)
+    const float alpha_ang = 0.75f;
+
+    for (size_t i = 0; i < out_waypoints.size(); ++i) {
+      const float dx = out_waypoints[i].x - prev_waypoints_[i].x;
+      const float dy = out_waypoints[i].y - prev_waypoints_[i].y;
+      if (std::hypot(dx, dy) < 1.5f) {
+        out_waypoints[i].x = alpha_pos * out_waypoints[i].x + (1.0f - alpha_pos) * prev_waypoints_[i].x;
+        out_waypoints[i].y = alpha_pos * out_waypoints[i].y + (1.0f - alpha_pos) * prev_waypoints_[i].y;
+        out_waypoints[i].z = alpha_pos * out_waypoints[i].z + (1.0f - alpha_pos) * prev_waypoints_[i].z;
+
+        float d_yaw = out_waypoints[i].yaw - prev_waypoints_[i].yaw;
+        while (d_yaw > 3.14159265f) d_yaw -= 2.0f * 3.14159265f;
+        while (d_yaw < -3.14159265f) d_yaw += 2.0f * 3.14159265f;
+        out_waypoints[i].yaw = prev_waypoints_[i].yaw + alpha_ang * d_yaw;
+
+        out_waypoints[i].curvature = alpha_ang * out_waypoints[i].curvature + (1.0f - alpha_ang) * prev_waypoints_[i].curvature;
+      }
+    }
+  }
+  prev_waypoints_ = out_waypoints;
 }
 
 bool TrackGeometrySpline::project_to_frenet(

@@ -14,9 +14,9 @@ struct VelocityEstimatorConfig
   float s_min{5.0f};                 // Minimum forward distance (m)
   float s_max{50.0f};                // Maximum forward distance (m)
   float max_train_speed{30.0f};      // Max plausible speed: 30 m/s (~108 km/h)
-  float max_train_accel{1.5f};       // Max metro acceleration/braking: 1.5 m/s^2
+  float max_train_accel{6.0f};       // Rate limiter (m/s^2) for responsive tracking
   float min_peak_correlation{0.25f}; // Minimum normalized correlation for valid match
-  float ema_alpha{0.40f};            // Exponential smoothing factor
+  float ema_alpha{0.45f};            // Exponential smoothing factor
   float default_speed{0.0f};         // Initial speed
 };
 
@@ -40,6 +40,7 @@ private:
   size_t num_bins_{0};
   std::vector<float> prev_histogram_;
   bool has_prev_histogram_{false};
+  bool is_initialized_{false};
   float current_velocity_{0.0f};
   std::vector<float> curr_histogram_;
 };

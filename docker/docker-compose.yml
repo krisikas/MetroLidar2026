@@ -12,6 +12,7 @@ services:
     ipc: "host"
     shm_size: "4gb"
     volumes:
+      - ../bags:/ros2_ws/bags:ro
       - ../archive:/ros2_ws/archive:ro
       - ./cyclonedds.xml:/ros2_ws/cyclonedds.xml:ro
       - /tmp/.X11-unix:/tmp/.X11-unix:rw

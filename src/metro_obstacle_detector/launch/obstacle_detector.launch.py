@@ -44,8 +44,8 @@ def generate_launch_description():
 
     declare_train_speed = DeclareLaunchArgument(
         'train_speed_mps',
-        default_value='15.0',
-        description='Train initial speed in m/s'
+        default_value='0.0',
+        description='Train initial speed in m/s (0.0 enables dynamic LiDAR velocity estimation)'
     )
 
     declare_params_file = DeclareLaunchArgument(

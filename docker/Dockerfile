@@ -53,6 +53,7 @@ RUN rosdep update --rosdistro humble || true
 WORKDIR /ros2_ws
 
 ARG BUILD_DATE=unknown
+RUN echo "MetroLidar Build: ${BUILD_DATE}"
 COPY docker/cyclonedds.xml /ros2_ws/cyclonedds.xml
 COPY src/ /ros2_ws/src/
 
