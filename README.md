@@ -1,251 +1,251 @@
-# Команда: МОПСЫ
+# Team: MOPSY
 --- 
-# Контроль габарита и детекция препятствий по 3D-лидару
+# Clearance Envelope Monitoring & Obstacle Detection via 3D LiDAR
 
-Программный комплекс контроля свободности пути и кинематического габарита для поездов метрополитена по данным бортового 3D-лидара.
+Software suite for track clearance and kinematic clearance envelope monitoring for metro trains based on on-board 3D LiDAR data.
 
-Решение разработано в рамках Задачи №5: «Система обнаружения посторонних объектов для беспилотных поездов в тоннеле метро по данным 3D-лидара» (Департамент транспорта Москвы / Московский метрополитен).
-
-> [!NOTE]
-> Подробное математическое описание, формулы базиса Френе и анализ путевой инфраструктуры вынесены в [**`SOLUTION.md`**](SOLUTION.md).
+Solution developed as part of Task #5: "Foreign Object Detection System for Driverless Metro Trains in Subway Tunnels Based on 3D LiDAR Data" (Moscow Department of Transport / Moscow Metro).
 
 > [!NOTE]
-> **Видеодемонстрация работы:** В репозитории представлена видеозапись полного цикла запуска комплекса и тестирования на различных сценариях (rosbag): [**`docs/MetroLidarDemo.mp4`**](docs/MetroLidarDemo.mp4) (подробнее см. [Раздел 4](#4-визуализация-и-интерфейс-оператора)). Также видео ролик доступен по ссылке https://disk.yandex.ru/d/If8lk82Lm65f6g.
+> Detailed mathematical formulation, Frenet frame derivations, and track infrastructure analysis are documented in [**`SOLUTION.md`**](SOLUTION.md). For Russian documentation, see [**`README_RU.md`**](README_RU.md).
 
 > [!NOTE]
-> В репозитории также представлена презентация с кратким описанием команды и решения задачи. В дериктории [**`docs/`**](docs/) имеется презентация в формате `PPTX` и `PDF`.
+> **Video Demonstration:** The repository includes a full-cycle video recording of system startup and multi-scenario rosbag validation: [**`docs/MetroLidarDemo.mp4`**](docs/MetroLidarDemo.mp4) (see details in [Section 4](#4-visualization-and-operator-interface)). The video is also available at https://disk.yandex.ru/d/If8lk82Lm65f6g.
+
+> [!NOTE]
+> The repository also includes a team presentation summarizing the engineering approach. The [**`docs/`**](docs/) directory contains presentations in `PPTX` and `PDF` formats.
 
 ---
 
-## 1. Архитектура решения и поток данных
+## 1. Solution Architecture and Data Flow
 
-Комплекс реализован на C++17 (алгоритмическое ядро детекции) и Python 3 (веб-интерфейс мониторинга) в среде **ROS 2 Humble**.
+The suite is implemented in C++17 (core algorithmic detection engine) and Python 3 (monitoring web interface) on **ROS 2 Humble**.
 
 ```mermaid
 flowchart LR
-    A["ROS 2 Bag / 3D-лидар"] --> B["CloudParser<br/>(SIMD, point_step 26B)"]
-    B --> C["DualRailTracker<br/>(УГР, колея 1520 мм)"]
-    C --> D["TrackGeometrySpline<br/>(3D-сплайн Френе, 150 м)"]
-    D --> E["ClearanceEnvelopeSDF<br/>(Габарит «М» ГОСТ 9238, O(1))"]
+    A["ROS 2 Bag / 3D LiDAR"] --> B["CloudParser<br/>(SIMD, point_step 26B)"]
+    B --> C["DualRailTracker<br/>(TOR, 1520 mm track gauge)"]
+    C --> D["TrackGeometrySpline<br/>(Frenet 3D Spline, 150 m)"]
+    D --> E["ClearanceEnvelopeSDF<br/>(Clearance Envelope 'M' GOST 9238, O(1))"]
     E --> F["SpecializedDetectors<br/>& TemporalTracker"]
-    F --> G["DecisionEngine<br/>(Тормозной путь & TTC)"]
-    B --> H["TrainVelocityEstimator<br/>(1D кросс-корреляция профилей)"]
+    F --> G["DecisionEngine<br/>(Braking distance & TTC)"]
+    B --> H["TrainVelocityEstimator<br/>(1D profile cross-correlation)"]
     H --> G
     G --> I["/metro/obstacles<br/>/metro/telemetry"]
     G --> J["Web GUI Dashboard<br/>(http.server + WebGL :8080)"]
     G --> K["RViz2 / Foxglove<br/>(:8765)"]
 ```
 
-### Модули системы:
-* **`cloud_parser`** (`C++17`): Потоковый синтаксический разбор `sensor_msgs/msg/PointCloud2`. Безопасная десериализация невыровненных записей (point_step = 26 байт у Hesai Pandar 128) через `std::memcpy` без риска alignment fault на ARM64 / x86_64.
-* **`dual_rail_tracker`** (`C++17`): Коррелятор положения рельсовых нитей ($1520 \pm 80$ мм) и оценка уровня головки рельса (УГР) по 90-й перцентили полотна в ближней зоне ($d \in [4, 16]$ м). Исключает влияние водоотводного лотка глубиной до 45 см.
-* **`track_geometry_spline`** (`C++17`): Построение 3D-траектории тоннеля на горизонте **150.0 м** (41 опорная точка с адаптивным шагом: 2 м до 40 м, 4 м до 80 м, 6 м до 150 м). Автоматическая классификация однопутных и двухпутных участков по поперечному пролету ($W > 6.5$ м $\to$ двухпутный). Непрерывное удержание центра свода в поворотах ($R \ge 160$ м) со смещением пути до 14 м. Временная фильтрация EMA ($\alpha = 0.40$).
-* **`clearance_envelope_sdf`** (`C++17`): Аналитическое знакопеременное поле расстояний (Signed Distance Field — SDF) контура габарита приближения строений «М» (ГОСТ 9238-2013). Временная сложность проверки точки: $\mathcal{O}(1)$.
-* **`specialized_detectors`** (`C++17`): Мультимасштабное выделение кандидатов (объемные тела, рельсовые препятствия, посторонние нависающие кабели).
-* **`temporal_obstacle_tracker`** (`C++17`): Временная ассоциация кластеров между кадрами (IoU + евклидово расстояние). Подтверждение препятствия за 2 кадра ($N_{\text{confirm}} \ge 2$), отсечение единичных оптических всплесков.
-* **`train_velocity_estimator`** (`C++17`): Оценка линейной скорости состава методом 1D пространственной кросс-корреляции продольного профиля тоннеля между последовательными кадрами лидара (не требует одометрии).
-* **`decision_engine`** (`C++17`): Оценка степени угрозы каждого препятствия (CRITICAL / WARNING / INFO), расчет остановочного пути $S_{\text{brake}}(V)$ и времени до столкновения (TTC).
-* **`metro_web_gui`** (`Python 3`): Встроенный легковесный веб-сервер телеметрии (порт 8080) на стандартной библиотеке `http.server` с трехмерной визуализацией сцены (нативный WebGL) без сторонних зависимостей.
+### System Modules:
+* **`cloud_parser`** (`C++17`): Streaming parser for `sensor_msgs/msg/PointCloud2`. Safe deserialization of unaligned binary records (point_step = 26 bytes in Hesai Pandar 128) via `std::memcpy` without alignment fault risks on ARM64 / x86_64.
+* **`dual_rail_tracker`** (`C++17`): Dual rail track correlator ($1520 \pm 80$ mm) and Top of Rail (TOR) height estimator using the 90th percentile of roadbed elevation in the near field ($d \in [4, 16]$ m). Eliminates drainage ditch artifacts up to 45 cm deep.
+* **`track_geometry_spline`** (`C++17`): 3D tunnel centerline trajectory synthesis up to a **150.0 m** lookahead horizon (41 waypoints with adaptive step: 2 m up to 40 m, 4 m up to 80 m, 6 m up to 150 m). Automatic classification of single-track and double-track sections by cross-sectional span ($W > 6.5$ m $\to$ double-track). Dynamic tunnel crown tracking in curves ($R \ge 160$ m) with lateral track offsets up to 14 m. EMA temporal filtering ($\alpha = 0.40$).
+* **`clearance_envelope_sdf`** (`C++17`): Analytical Signed Distance Field (SDF) of the kinematic structure clearance envelope "M" (GOST 9238-2013). Point containment check complexity: $\mathcal{O}(1)$.
+* **`specialized_detectors`** (`C++17`): Multi-scale candidate extraction (volumetric bodies, rail obstacles, dangling overhead cables).
+* **`temporal_obstacle_tracker`** (`C++17`): Inter-frame cluster association (IoU + Euclidean distance). Obstacle confirmation over 2 frames ($N_{\text{confirm}} \ge 2$), suppressing transient sensor noise.
+* **`train_velocity_estimator`** (`C++17`): Linear velocity estimation via 1D spatial cross-correlation of longitudinal tunnel profiles between consecutive LiDAR frames (does not require external odometry).
+* **`decision_engine`** (`C++17`): Threat classification for each detected object (CRITICAL / WARNING / INFO), calculation of stopping distance $S_{\text{brake}}(V)$ and Time-To-Collision (TTC).
+* **`metro_web_gui`** (`Python 3`): Built-in lightweight telemetry web server (port 8080) powered by standard library `http.server` with native WebGL 3D scene rendering and zero third-party dependencies.
 
 ---
 
-## 2. Краткое описание алгоритма
+## 2. Algorithm Overview
 
-### 2.1. Контроль габарита (Clearance Violation)
-Поскольку в тоннеле метро большую часть времени путь свободен, а обучающих данных по аварийным инцидентам не существует, система реализует детерминированный геометрический контроль: проверка попадания точек в сопутствующий объем габарита подвижного состава.
+### 2.1. Clearance Violation Monitoring
+Because metro tunnels remain unobstructed the vast majority of the time, and training datasets for catastrophic tunnel incidents do not exist, the system applies deterministic geometric verification: validating point penetration into the kinematic clearance envelope volume of the rolling stock.
 
-Пространство вдоль пути параметризуется в сопутствующем базисе Френе $(s, u, v)$, где $s$ — дистанция по кривой пути, $u$ — латеральное смещение, $v = Z - Z_{\text{rail}}$ — высота над рельсом.
+The space along the track is parameterized in the Frenet-Serret frame $(s, u, v)$, where $s$ is the arc length along the track curve, $u$ is the lateral offset, and $v = Z - Z_{\text{rail}}$ is the height above Top of Rail (TOR).
 
-### 2.2. Аналитический габарит «М» (ГОСТ 9238-2013)
-Габарит аппроксимирован кусочно-гладкой функцией допустимой полуширины $W(v)$:
-* $v < 0.12$ м — исключение балласта и стрелочных крестовин;
-* $v \in [0.12, 0.45]$ м — подвагонное пространство ($W = 1.05$ м, изоляция контактного рельса при $|u| \ge 1.12$ м);
-* $v \in [0.45, 1.25]$ м — станционная зона ($W = 1.30$ м, вырез под пассажирские платформы $1.42$ м);
-* $v \in [1.25, 2.45]$ м — пояс кузова вагона ($W = 1.35$ м);
-* $v \in [2.45, 2.80]$ м — аэродинамический скос крыши ($W = 1.35 \to 1.05$ м);
-* $v > 2.80$ м — свод тоннеля.
+### 2.2. Analytical Clearance Envelope "M" (GOST 9238-2013)
+The envelope is approximated by a piecewise-smooth admissible half-width function $W(v)$:
+* $v < 0.12$ m — ballast bed and turnout frogs exclusion;
+* $v \in [0.12, 0.45]$ m — underbody equipment zone ($W = 1.05$ m, third rail isolation at $|u| \ge 1.12$ m);
+* $v \in [0.45, 1.25]$ m — station platform zone ($W = 1.30$ m, clearance cutout for passenger platforms at $1.42$ m);
+* $v \in [1.25, 2.45]$ m — car body belt ($W = 1.35$ m);
+* $v \in [2.45, 2.80]$ m — aerodynamic roof taper ($W = 1.35 \to 1.05$ m);
+* $v > 2.80$ m — tunnel crown.
 
-Расстояние со знаком $\text{SDF}(u, v) = |u| - W(v)$ вычисляется за $\mathcal{O}(1)$ операций: $\text{SDF} < 0$ означает проникновение объекта внутрь габарита.
+The signed distance $\text{SDF}(u, v) = |u| - W(v)$ is computed in $\mathcal{O}(1)$ operations: $\text{SDF} < 0$ indicates object penetration into the clearance envelope.
 
-### 2.3. Зонирование угроз и расчет остановочного пути
-Остановочный путь поезда моделируется в строгом соответствии с ПТЭ метрополитенов и конфигурацией `params.yaml` с учетом времени реакции тормозной системы ($t_{\text{react}} = 0.50$ с), нормативного экстренного замедления ($a_{\text{emerg}} = 1.20$ м/с²) и гарантированного запаса безопасности ($S_{\text{margin}} = 10.0$ м):
+### 2.3. Threat Zoning and Stopping Distance Calculation
+Train stopping distance is modeled in accordance with metro operating regulations and `params.yaml` configuration, factoring in braking system reaction time ($t_{\text{react}} = 0.50$ s), normative emergency deceleration ($a_{\text{emerg}} = 1.20$ m/s²), and a guaranteed safety stop margin ($S_{\text{margin}} = 10.0$ m):
 $$S_{\text{brake}}(V) = V \cdot t_{\text{react}} + \frac{V^2}{2 \cdot a_{\text{emerg}}} + S_{\text{margin}} = V \cdot 0.50 + \frac{V^2}{2.40} + 10.0$$
 
-*Примеры расчетных значений:*
-* При $V = 43.9$ км/ч ($12.21$ м/с, скриншот Web GUI): $S_{\text{brake}} = 12.21 \cdot 0.50 + \frac{12.21^2}{2.40} + 10.0 = \mathbf{78.2}\text{ м}$;
-* При $V = 60.0$ км/ч ($16.67$ м/с): $S_{\text{brake}} = \mathbf{134.1}\text{ м}$;
-* На скорости $V \approx 63.8$ км/ч ($17.72$ м/с) тормозной путь достигает предела горизонта лидара ($150.0$ м).
+*Calculated reference values:*
+* At $V = 43.9$ km/h ($12.21$ m/s, Web GUI screenshot): $S_{\text{brake}} = 12.21 \cdot 0.50 + \frac{12.21^2}{2.40} + 10.0 = \mathbf{78.2}\text{ m}$;
+* At $V = 60.0$ km/h ($16.67$ m/s): $S_{\text{brake}} = \mathbf{134.1}\text{ m}$;
+* At $V \approx 63.8$ km/h ($17.72$ m/s), braking distance reaches the maximum LiDAR lookahead limit ($150.0$ m).
 
-Детерминированная классификация угроз (`DecisionEngine`):
-* **`CRITICAL` (Экстренное торможение):** подтвержденный объект внутри габарита ($\text{SDF} \le 0.0$ м) и дистанция $D \le S_{\text{brake}}(V)$;
-* **`WARNING` (Служебное предупреждение):** подтвержденный объект внутри габарита на дистанции $D > S_{\text{brake}}(V)$ либо объект в буферной зоне приближения ($\text{SDF} \in (0, 0.30]$ м);
-* **`INFO` (Информационный мониторинг):** объекты на дальнем горизонте или вне буферной зоны.
+Deterministic threat classification (`DecisionEngine`):
+* **`CRITICAL` (Emergency braking):** confirmed object inside the envelope ($\text{SDF} \le 0.0$ m) at distance $D \le S_{\text{brake}}(V)$;
+* **`WARNING` (Advisory alert):** confirmed object inside envelope at distance $D > S_{\text{brake}}(V)$ or object within the buffer clearance zone ($\text{SDF} \in (0, 0.30]$ m);
+* **`INFO` (Informational tracking):** distant horizon objects or objects outside the clearance buffer.
 
 ---
 
-## 3. Быстрый запуск в Docker
+## 3. Quick Start with Docker
 
-Скрипт `run_docker.sh` адаптирован для вызова из любого терминала (`bash run_docker.sh`) независимо от текущей директории.
+The `run_docker.sh` script is designed to be executed from any terminal (`bash run_docker.sh`) regardless of the current working directory.
 
-### 3.1. Сборка Docker-образа
+### 3.1. Building Docker Image
 ```bash
 ./run_docker.sh --build
 ```
 
-### 3.2. Автозапуск (первый бэг из папки `bags/`)
-Поместите rosbag в папку `bags/` и выполните:
+### 3.2. Auto-run (first bag from `bags/` directory)
+Place a rosbag in the `bags/` folder and run:
 ```bash
 ./run_docker.sh --auto
 ```
-*Скрипт автоматически найдет первый доступный датасет, определит топик облака точек и запустит обработку.*
+*The script will automatically detect the first available dataset, resolve the point cloud topic, and launch processing.*
 
-### 3.3. Запуск конкретного бэга
+### 3.3. Running a Specific Bag
 ```bash
-# По названию папки/файла в bags/ или archive/for_hackathon/:
+# By folder/file name in bags/ or archive/for_hackathon/:
 ./run_docker.sh --bag doubleT_obstacle
 
-# Другие примеры:
+# Additional examples:
 ./run_docker.sh --bag roundT_pressureGate_roundT
 ./run_docker.sh --bag squareT_platform_squareT_switch
 
-# По произвольному пути на диске:
+# By arbitrary path on disk:
 ./run_docker.sh --bag /path/to/custom_bag
 ```
 
-### 3.4. Дополнительные опции
+### 3.4. Additional Options
 ```bash
-# Интерактивный bash внутри контейнера:
+# Interactive bash inside the container:
 ./run_docker.sh --shell
 
-# Просмотр справки и найденных бэгов:
+# View help and detected bag files:
 ./run_docker.sh --help
 ```
 
 ---
 
-## 4. Визуализация и интерфейс оператора
+## 4. Visualization and Operator Interface
 
-Комплекс предоставляет два независимых интерфейса визуализации в реальном времени: собственный легковесный веб-интерфейс (порт 8080) и интеграцию с Foxglove Studio / RViz2 (порт 8765).
+The suite provides two independent real-time visualization interfaces: a proprietary lightweight web interface (port 8080) and integration with Foxglove Studio / RViz2 (port 8765).
 
-### 4.1. Видеодемонстрация работы системы (`docs/MetroLidarDemo.mp4`)
+### 4.1. Video Demonstration (`docs/MetroLidarDemo.mp4`)
 
-В репозиторий включена видеозапись ([**`docs/MetroLidarDemo.mp4`**](docs/MetroLidarDemo.mp4), 4 мин 07 сек), демонстрирующая полный цикл запуска и работы с различными росбагами:
-* **Развертывание и запуск:** сборка и старт через `run_docker.sh`, автоопределение топиков лидара, запуск ноды детекции и веб-сервера телеметрии;
-* **Тестирование на различных сценариях (rosbag):**
-  * `doubleT_platform`: движение по двухпутному тоннелю, проезд станции (изоляция платформы от габарита поезда, статус `ПУТЬ СВОБОДЕН`, расчет путевой скорости);
-  * `cloud_with_fake_obj`: движение с фейковыми препятсвиями, выставление аварийного статуса `ОПАСНОСТЬ: ТОРМОЖЕНИЕ` и отрисовка 3D Bounding Box;
-  * `doubleT_obstacle`: динамическое обнаружение постороннего объекта на ходовом пути, расчет тормозного пути, выставление аварийного статуса `ОПАСНОСТЬ: ТОРМОЖЕНИЕ` и отрисовка 3D Bounding Box;
-* **Синхронная визуализация:** одновременная работа Web GUI Dashboard (`http://localhost:8080`) и 3D-панели Foxglove Studio (`ws://localhost:8765`).
+The repository includes a video recording ([**`docs/MetroLidarDemo.mp4`**](docs/MetroLidarDemo.mp4), 4 min 07 sec) demonstrating a complete startup cycle and validation across various rosbags:
+* **Deployment & Startup:** build and launch via `run_docker.sh`, automatic LiDAR topic resolution, launching the detection node and telemetry web server;
+* **Testing across multiple scenarios (rosbag):**
+  * `doubleT_platform`: traversing a double-track tunnel, station passage (isolating the platform from the train clearance envelope, `CLEAR TRACK` status, speed estimation);
+  * `cloud_with_fake_obj`: operation with synthetic obstacles, triggering `DANGER: BRAKE` emergency state and 3D Bounding Box rendering;
+  * `doubleT_obstacle`: dynamic detection of a foreign object on the running track, braking distance computation, triggering `DANGER: BRAKE` and 3D Bounding Box rendering;
+* **Synchronous Visualization:** concurrent execution of Web GUI Dashboard (`http://localhost:8080`) and Foxglove Studio 3D panel (`ws://localhost:8765`).
 
-Презентация решения команды: [**`docs/ЛЦТ_МОПСЫ_презентация.pdf`**](docs/ЛЦТ_МОПСЫ_презентация.pdf) ([исходник .pptx](docs/ЛЦТ_МОПСЫ_презентация.pptx)).
+Team solution presentation: [**`docs/ЛЦТ_МОПСЫ_презентация.pdf`**](docs/ЛЦТ_МОПСЫ_презентация.pdf) ([source .pptx](docs/ЛЦТ_МОПСЫ_презентация.pptx)).
 
 ### 4.2. Web GUI Dashboard (`http://localhost:8080`)
-Веб-интерфейс не требует установки стороннего ПО, работает в любом современном браузере и оптимизирован для мониторинга поездной обстановки:
-* **CAD-палитра и HUD:** статус пути (`ПУТЬ СВОБОДЕН` / `ОПАСНОСТЬ: ОБЪЕКТ НА ... М`), путевая скорость поезда, остановочный путь, дистанция и TTC;
-* **WebGL 3D-сцена:** облако точек тоннеля, рельсы (колея 1520 мм), каркас кинематического габарита «М» ГОСТ 9238 и 3D-боксы обнаруженных препятствий;
-* **Телеметрия в реальном времени:** частота лидара (10.1 Гц), темп обработки (8.6–10.1 Гц), время расчета кадра ($21.4 \dots 25.0$ мс на 307 000 точек).
+The web interface requires no external software installation, runs in any modern browser, and is optimized for train operational monitoring:
+* **CAD Palette & HUD:** track status (`CLEAR TRACK` / `DANGER: OBSTACLE AT ... M`), train speed, braking distance, obstacle distance, and TTC;
+* **WebGL 3D Scene:** tunnel point cloud, rails (1520 mm track gauge), GOST 9238 "M" clearance envelope wireframe, and 3D bounding boxes of detected obstacles;
+* **Real-time Telemetry:** LiDAR rate (10.1 Hz), processing throughput (8.6–10.1 Hz), frame compute latency ($21.4 \dots 25.0$ ms on 307,000 points).
 
-![Web GUI: Свободный путь](docs/images/WEB-Clear.png)
-*Рисунок 1. Web GUI Dashboard: режим свободного пути (скорость 43.9 км/ч, тормозной путь 78.2 м, время расчета 21.4 мс на 307 200 точек).*
+![Web GUI: Clear Track](docs/images/WEB-Clear.png)
+*Figure 1. Web GUI Dashboard: clear track mode (speed 43.9 km/h, braking distance 78.2 m, compute time 21.4 ms on 307,200 points).*
 
-![Web GUI: Детекция препятствия](docs/images/WEB-Obsticle.png)
-*Рисунок 2. Web GUI Dashboard: обнаружение препятствия #8 на дистанции 48.7 м (размеры 1.90×1.88 м, статус «Опасность», TTC 7.2 с, время расчета 25.0 мс).*
+![Web GUI: Obstacle Detection](docs/images/WEB-Obsticle.png)
+*Figure 2. Web GUI Dashboard: obstacle #8 detected at distance 48.7 m (dimensions 1.90×1.88 m, status "Danger", TTC 7.2 s, compute time 25.0 ms).*
 
 ### 4.3. Foxglove Studio / RViz2
-Подключение по протоколу Foxglove WebSocket (`ws://localhost:8765`) или через нативный RViz2:
+Connection via Foxglove WebSocket protocol (`ws://localhost:8765`) or native RViz2:
 
-![Foxglove Studio: Свободный тоннель и станция](docs/images/Foxglove-clear.png)
-*Рисунок 3. Foxglove Studio: каркас кинематического габарита «М» (бирюзовый контур), рельсы и траектория пути на горизонте 150 м. Платформа станции и несущие колонны изолированы за пределами габарита.*
+![Foxglove Studio: Clear Tunnel and Station](docs/images/Foxglove-clear.png)
+*Figure 3. Foxglove Studio: kinematic clearance envelope "M" wireframe (cyan outline), rails, and track trajectory up to 150 m. Station platform and structural columns are isolated outside the envelope.*
 
-![Foxglove Studio: Обнаружение препятствия](docs/images/Foxglove-obsticle.png)
-*Рисунок 4. Foxglove Studio: пространственная детекция постороннего объекта на ходовом пути (красный 3D-маркер топика `/metro/markers`).*
+![Foxglove Studio: Obstacle Detection](docs/images/Foxglove-obsticle.png)
+*Figure 4. Foxglove Studio: spatial detection of an obstacle on the running track (red 3D marker on `/metro/markers`).*
 
 ---
 
-## 5. Параметры и конфигурация
+## 5. Parameters and Configuration
 
-Конфигурация задается в `src/metro_obstacle_detector/config/params.yaml`:
+Configuration is defined in `src/metro_obstacle_detector/config/params.yaml`:
 
-| Параметр | По умолчанию | Описание |
+| Parameter | Default | Description |
 |---|---|---|
-| `lookahead_distance` | `150.0` м | Максимальный горизонт контроля и построения сплайна |
-| `min_distance` | `2.0` м | Начало зоны детекции перед сенсором |
-| `min_curve_radius` | `160.0` м | Минимальный радиус кривой пути в плане |
-| `gauge` | `1.520` м | Ширина колеи метрополитена |
-| `nominal_tor_height` | `1.075` м | Номинальная высота установки лидара над УГР |
-| `emergency_deceleration` | `1.20` м/с² | Экстренное замедление поезда при торможении (ПТЭ метрополитена) |
-| `system_reaction_time` | `0.50` с | Время реакции тормозной системы и пневмомагистрали |
-| `safety_stop_margin` | `10.0` м | Гарантированный запас дистанции при полной остановке |
-| `train_speed_mps` | `0.0` м/с | Начальная скорость (0.0 — динамический расчет по лидару) |
-| `lidar_topic` | `/lidar_points` | Имя топика облака точек (автоопределяется скриптом) |
-| `qos_reliability` | `sensor_data` | Профиль надежности QoS подписки |
+| `lookahead_distance` | `150.0` m | Maximum monitoring and spline synthesis horizon |
+| `min_distance` | `2.0` m | Start of detection zone in front of sensor |
+| `min_curve_radius` | `160.0` m | Minimum horizontal track curve radius |
+| `gauge` | `1.520` m | Metro track gauge width |
+| `nominal_tor_height` | `1.075` m | Nominal height of LiDAR mount above Top of Rail (TOR) |
+| `emergency_deceleration` | `1.20` m/s² | Emergency train braking deceleration (metro regulations) |
+| `system_reaction_time` | `0.50` s | Brake system and pneumatic line reaction time |
+| `safety_stop_margin` | `10.0` m | Guaranteed safety distance margin at complete stop |
+| `train_speed_mps` | `0.0` m/s | Initial speed (0.0 enables dynamic LiDAR estimation) |
+| `lidar_topic` | `/lidar_points` | Point cloud topic name (auto-detected by runner) |
+| `qos_reliability` | `sensor_data` | QoS subscription reliability profile |
 
 ---
 
-## 6. Выходные интерфейсы ROS 2
+## 6. ROS 2 Output Interfaces
 
-| Топик | Тип | Назначение |
+| Topic | Type | Purpose |
 |---|---|---|
-| `/metro/obstacles` | `metro_obstacle_detector_interfaces/msg/ObstacleArray` | Массив активных препятствий, статус тревоги, флаг торможения, TTC, тормозной путь |
-| `/metro/track_path` | `nav_msgs/msg/Path` | 3D-траектория оси пути на горизонте 150 м |
-| `/metro/track_profile` | `metro_obstacle_detector_interfaces/msg/TrackProfile` | Оценка УГР, координаты ходовых рельсов, тип тоннеля |
-| `/metro/train_speed` | `std_msgs/msg/Float32` | Оцененная путевая скорость поезда по лидару (м/с) |
-| `/metro/telemetry` | `metro_obstacle_detector_interfaces/msg/SystemHealth` | Время расчета кадра (мс), частоты, число точек |
-| `/metro/markers` | `visualization_msgs/msg/MarkerArray` | 3D-боксы препятствий с цветовой кодировкой угроз для RViz2 |
-| `/metro/clearance_envelope` | `visualization_msgs/msg/MarkerArray` | 3D-каркас кинематического габарита «М» ГОСТ 9238 |
+| `/metro/obstacles` | `metro_obstacle_detector_interfaces/msg/ObstacleArray` | Array of active obstacles, threat status, emergency brake flag, TTC, braking distance |
+| `/metro/track_path` | `nav_msgs/msg/Path` | 3D trajectory of track centerline up to 150 m horizon |
+| `/metro/track_profile` | `metro_obstacle_detector_interfaces/msg/TrackProfile` | Estimated TOR height, running rail coordinates, tunnel profile type |
+| `/metro/train_speed` | `std_msgs/msg/Float32` | Estimated linear train speed from LiDAR cross-correlation (m/s) |
+| `/metro/telemetry` | `metro_obstacle_detector_interfaces/msg/SystemHealth` | Frame computation time (ms), processing rates, point counts |
+| `/metro/markers` | `visualization_msgs/msg/MarkerArray` | 3D bounding boxes with threat color coding for RViz2 |
+| `/metro/clearance_envelope` | `visualization_msgs/msg/MarkerArray` | 3D wireframe of GOST 9238 "M" kinematic clearance envelope |
 
 ---
 
-## 7. Результаты тестирования и верификации
+## 7. Testing and Verification Results
 
-Верификация алгоритма выполнена на всех предоставленных сценариях движения в тоннелях Московского метрополитена, а также на наборе синтетических препятствий:
+Algorithm verification was performed across all provided datasets recorded in Moscow Metro tunnels, as well as on a suite of synthetic obstacles:
 
-| Датасет / Сценарий | Препятствие на пути | Статус в рабочей зоне ($D \le 70$ м) | Ложные остановки (`CRITICAL`) | Дальний горизонт ($135 \pm 10$ м) | Особенности инфраструктуры и физика поведения на поворотах |
+| Dataset / Scenario | Track Obstacle | Status in Working Zone ($D \le 70$ m) | False Stops (`CRITICAL`) | Distant Horizon ($135 \pm 10$ m) | Infrastructure Characteristics and Curve Physics |
 |---|:---:|:---:|:---:|:---:|---|
-| `doubleT_obstacle` | **ЕСТЬ** | **ЭКСТРЕННОЕ ТОРМОЖЕНИЕ** | **0** (истинное) | `WARNING` ($76 \dots 107$ м) | Препятствие на ходовом пути стабильно захватывается ($17.5 \dots 35.0$ м) и удерживается трекером ($N_{\text{confirm}} \ge 2$) |
-| `doubleT_platform` | **НЕТ** | **ПУТЬ СВОБОДЕН** | **0** | **`WARNING` (50–80% кадров)**, $125 \dots 145$ м | Платформа ($1.42$ м) отсечена вырезом $1.30$ м. В повороте на $135$ м спрямленный сплайн цепляет стену двухпутного тоннеля |
-| `roundT_doubleT` | **НЕТ** | **ПУТЬ СВОБОДЕН** | **0** | **`WARNING` (~50% кадров)**, $110 \dots 145$ м | Переход в двухпутный раструб; в повороте экстраполяция сплайна касается бокового свода на горизонте $135$ м |
-| `roundT_pressureGate_roundT` | **НЕТ** | **ПРЕДУПРЕЖДЕНИЕ** ($18.4$ м) | **0** | `INFO` / `CLEAR` | Проезд гермозатвора в кривой ($R \approx 200$ м); зазор до портала $5 \dots 10$ см вызывает штатный `WARNING` без срыва стоп-крана |
-| `squareT_platform_squareT_switch` | **НЕТ** | **ПУТЬ СВОБОДЕН** | **0** | `CLEAR` | Стрелочный перевод и платформа; крестовины на уровне головки рельса отсекаются зоной балласта ($v < 0.12$ м) и трекером |
+| `doubleT_obstacle` | **YES** | **EMERGENCY BRAKE** | **0** (true positive) | `WARNING` ($76 \dots 107$ m) | Running track obstacle reliably acquired ($17.5 \dots 35.0$ m) and tracked ($N_{\text{confirm}} \ge 2$) |
+| `doubleT_platform` | **NO** | **CLEAR TRACK** | **0** | **`WARNING` (50–80% frames)**, $125 \dots 145$ m | Platform ($1.42$ m) isolated by $1.30$ m cutout. In $135$ m curve, straight spline extrapolation touches tunnel wall |
+| `roundT_doubleT` | **NO** | **CLEAR TRACK** | **0** | **`WARNING` (~50% frames)**, $110 \dots 145$ m | Transition to double-track bellmouth; spline extrapolation touches side crown at $135$ m horizon |
+| `roundT_pressureGate_roundT` | **NO** | **WARNING** ($18.4$ m) | **0** | `INFO` / `CLEAR` | Traversal of blast gate in curve ($R \approx 200$ m); $5 \dots 10$ cm clearance margin triggers expected `WARNING` without emergency brake trip |
+| `squareT_platform_squareT_switch` | **NO** | **CLEAR TRACK** | **0** | `CLEAR` | Turnout switch and platform; frogs at TOR level are excluded by ballast buffer ($v < 0.12$ m) and tracker |
 
-### 7.1. Инженерный анализ дальних предупреждений на поворотах ($135 \pm 10$ м)
-В ходе реального прогона в поворотах двухпутных тоннелей (`doubleT`) на дальнем горизонте $125 \dots 145$ м возникают регулярные срабатывания уровня `WARNING` (порядка 1–3 кластеров на кадр в 50–80% кадров поворота). Это естественное физическое поведение сенсора и алгоритма:
-1. **Геометрия двухпутного тоннеля в кривой:** В двухпутном тоннеле ($W > 6.5$ м) поезд идет со смещением к одной из стен. При радиусе кривой $R \approx 250 \dots 400$ м стрела кругового прогиба дуги пути на расстоянии $L = 135$ м составляет $f \approx \frac{L^2}{2R} \approx 22 \dots 36$ м, тогда как стена тоннеля отстоит от оси пути всего на $2.5 \dots 3.5$ м;
-2. **Разрежение лучей лидара:** На дистанции $135$ м угол скольжения луча к рельсам составляет менее $0.45^\circ$. Сенсор физически не получает отражений от головок рельсов, поэтому сплайн на дальнем горизонте экстраполируется по текущему направлению;
-3. **Безопасность зонирования угроз:** Спрямленный в повороте габарит «М» неизбежно пересекает изгибающуюся стену или кабельные полки на дистанции $135 \pm 10$ м. Однако при эксплуатационных скоростях движения ($40 \dots 60$ км/ч) расчетный тормозной путь поезда составляет $S_{\text{brake}} = 78.2 \dots 134.1$ м, что меньше дистанции обнаружения ($D \approx 135$ м). Модуль решений (`DecisionEngine`) переводит эти удаленные события в статус **`WARNING`** (предупреждение без срыва стоп-крана), **гарантируя отсутствие ложных экстренных торможений (`CRITICAL = 0`)** на кривых участках пути.
+### 7.1. Engineering Analysis of Distant Curve Warnings ($135 \pm 10$ m)
+During real runs through curved sections of double-track tunnels (`doubleT`), recurring alerts of `WARNING` level occur at the distant horizon of $125 \dots 145$ m (approximately 1–3 clusters per frame across 50–80% of curve frames). This is a natural physical consequence of sensor geometry and algorithm kinematics:
+1. **Double-track tunnel curve geometry:** In a double-track tunnel ($W > 6.5$ m), the train runs offset toward one of the outer walls. With a curve radius of $R \approx 250 \dots 400$ m, the circular arc deflection at distance $L = 135$ m is $f \approx \frac{L^2}{2R} \approx 22 \dots 36$ m, whereas the tunnel wall is situated only $2.5 \dots 3.5$ m from the track centerline;
+2. **LiDAR beam divergence:** At a distance of $135$ m, the incidence angle of beams grazing the rails is below $0.45^\circ$. The sensor physically receives no usable returns from rail heads, requiring spline extrapolation along the current tangent on the distant horizon;
+3. **Safety threat zoning:** The tangent-projected envelope "M" inevitably intersects the curving tunnel wall or cable racks at $135 \pm 10$ m. However, at operational speeds ($40 \dots 60$ km/h), the calculated stopping distance is $S_{\text{brake}} = 78.2 \dots 134.1$ m, which is strictly less than the detection horizon ($D \approx 135$ m). The decision module (`DecisionEngine`) classifies these distant events as **`WARNING`** (advisory alerts without emergency braking), **guaranteeing zero false emergency stops (`CRITICAL = 0`)** on curved track segments.
 
-### 7.2. Синтетические препятствия (`cloud_with_fake_obj`):
-* Крупногабаритный объект 2×2 м: обнаружение на **$28.3$ м** (722 точки, `CRITICAL`);
-* Малогабаритный предмет 0.3×0.3 м: обнаружение на **$17.1$ м** (71 точка, `CRITICAL`);
-* Посторонний брус на рельсах: обнаружение на **$65.7$ м** (41 точка, `CRITICAL`);
-* Свисающий кабель ($\varnothing 5$ см): обнаружение на **$127.2$ м** (13 точек, `WARNING`);
-* Объект на кромке габарита: обнаружение на **$88.1$ м** (371 точка, `WARNING`).
+### 7.2. Synthetic Obstacles (`cloud_with_fake_obj`):
+* Volumetric object 2×2 m: detected at **$28.3$ m** (722 points, `CRITICAL`);
+* Small object 0.3×0.3 m: detected at **$17.1$ m** (71 points, `CRITICAL`);
+* Foreign track tie on rails: detected at **$65.7$ m** (41 points, `CRITICAL`);
+* Dangling overhead cable ($\varnothing 5$ cm): detected at **$127.2$ m** (13 points, `WARNING`);
+* Object on envelope margin: detected at **$88.1$ m** (371 points, `WARNING`).
 
-### 7.3. Скорость обработки и профилирование по слоям (Latency Breakdown)
+### 7.3. Processing Speed and Layer-by-Layer Latency Breakdown
 
-Замеры выполнены на стендовой конфигурации Macbook Pro M5 Pro на реальных облаках точек Hesai Pandar 128 (307 200 точек на кадр):
+Benchmark measurements conducted on a Macbook Pro M5 Pro workstation using real Hesai Pandar 128 point clouds (307,200 points per frame):
 
-| Слой / Этап алгоритмического конвейера | Время расчета | Доля | Сложность | Инженерная реализация и оптимизация |
+| Layer / Pipeline Stage | Compute Time | Share | Complexity | Engineering Implementation and Optimizations |
 |---|:---:|:---:|:---:|---|
-| **1. CloudParser** (потоковый парсинг PointCloud2) | $4.2 \dots 5.5$ мс | $21\%$ | $\mathcal{O}(N)$ | SIMD `std::memcpy` с шагом 26 байт, отсечение `NaN` и продольное разбиение на корзины |
-| **2. DualRailTracker** (поиск рельсов и УГР) | $2.1 \dots 3.0$ мс | $11\%$ | $\mathcal{O}(N_{\text{bed}} \log N)$ | Корреляция колеи $1520 \pm 80$ мм, 90-й перцентиль УГР, игнорирование лотка глубже 20 см |
-| **3. TrackGeometrySpline** (3D-траектория 150 м) | $2.8 \dots 3.8$ мс | $14\%$ | $\mathcal{O}(K \cdot M)$ | Сплайн Френе (адаптивный шаг 2/4/6 м, 41 вейпоинт), динамическое удержание свода в поворотах ($R \ge 160$ м) |
-| **4. ClearanceEnvelopeSDF** (габарит «М» ГОСТ 9238) | $6.5 \dots 8.5$ мс | $34\%$ | $\mathcal{O}(1)$ / точка | Аналитическое 2D-поле расстояний со знаком (SDF) для каждого луча в сечении пути |
-| **5. SpecializedDetectors & Tracker** | $2.0 \dots 3.2$ мс | $12\%$ | $\mathcal{O}(N_{\text{in}} \log N)$ | Кластеризация кандидатов (объемные тела, брус, кабели), межкадровая ассоциация ($N_{\text{conf}} \ge 2$) |
-| **6. TrainVelocityEstimator & DecisionEngine** | $0.8 \dots 1.2$ мс | $5\%$ | $\mathcal{O}(B \log B)$ | 1D кросс-корреляция профилей тоннеля (расчет скорости $V$), расчет $S_{\text{brake}}(V)$ и TTC |
-| **Полный цикл обработки кадра** | **$21.4 \dots 25.0$ мс** | **$100\%$** | — | **Темп: $40 \dots 47$ FPS** (запас $\times 4$ относительно лидара 10 Гц) |
+| **1. CloudParser** (PointCloud2 streaming parser) | $4.2 \dots 5.5$ ms | $21\%$ | $\mathcal{O}(N)$ | SIMD `std::memcpy` with 26-byte stride, `NaN` filtering, and longitudinal binning |
+| **2. DualRailTracker** (rail discovery & TOR level) | $2.1 \dots 3.0$ ms | $11\%$ | $\mathcal{O}(N_{\text{bed}} \log N)$ | $1520 \pm 80$ mm gauge correlation, 90th percentile TOR, ignoring ditches deeper than 20 cm |
+| **3. TrackGeometrySpline** (150 m 3D trajectory) | $2.8 \dots 3.8$ ms | $14\%$ | $\mathcal{O}(K \cdot M)$ | Frenet spline (adaptive 2/4/6 m step, 41 waypoints), dynamic crown tracking in curves ($R \ge 160$ m) |
+| **4. ClearanceEnvelopeSDF** (GOST 9238 envelope "M") | $6.5 \dots 8.5$ ms | $34\%$ | $\mathcal{O}(1)$ / pt | Analytical 2D Signed Distance Field (SDF) evaluated per beam across track cross-sections |
+| **5. SpecializedDetectors & Tracker** | $2.0 \dots 3.2$ ms | $12\%$ | $\mathcal{O}(N_{\text{in}} \log N)$ | Candidate clustering (volumetric bodies, rail obstacles, cables), temporal tracking ($N_{\text{conf}} \ge 2$) |
+| **6. TrainVelocityEstimator & DecisionEngine** | $0.8 \dots 1.2$ ms | $5\%$ | $\mathcal{O}(B \log B)$ | 1D tunnel profile cross-correlation (velocity $V$), $S_{\text{brake}}(V)$ and TTC calculation |
+| **Total Frame Processing Cycle** | **$21.4 \dots 25.0$ ms** | **$100\%$** | — | **Throughput: $40 \dots 47$ FPS** ($\times 4$ margin over 10 Hz LiDAR) |
 
-*Фактическое время цикла в веб-интерфейсе оператора (см. Рисунки 1–2): **$21.4$ мс** при свободном пути и **$25.0$ мс** при активном обнаружении препятствия на 307 000 точек.*
+*Actual cycle time measured in operator web interface (see Figures 1–2): **$21.4$ ms** on clear track and **$25.0$ ms** during active obstacle detection on 307,000 points.*
 
-Детальный математический разбор: [**`SOLUTION.md`**](SOLUTION.md).
+Detailed mathematical derivations: [**`SOLUTION.md`**](SOLUTION.md).
 
 ---
 
-## 8. Ограничения метода
+## 8. Limitations of the Method
 
-1. **Разрешающая способность на дальних дистанциях:** На дистанциях свыше 120–150 м плотность лучей лидара падает; малогабаритные объекты сечением менее $10 \times 10$ см могут быть представлены лишь $1 \dots 3$ точками;
-2. **Узкие негабаритные порталы:** В створе противоударных гермозатворов в кривых зазор до стальной рамы уменьшается до $5 \dots 10$ см, что вызывает штатные предупреждения системы уровня `WARNING`;
-3. **Плотная взвесь:** При экстремальном запылении тоннеля взвесью цементной пыли требуется интеграция с радиолокационным или видеоканалом;
-4. **Пространственная периодичность чугунной обделки тоннеля:** В круглых тоннелях регулярный шаг чугунных тюбингов (~1 м) при 1D кросс-корреляции профилей может приводить к алиасингу пиков коррелограммы при оценке скорости поезда. В алгоритме `TrainVelocityEstimator` это парируется медианной фильтрацией производной, отслеживанием максимумов с учетом предыстории и санитарными лимитами по ускорению/одометрии.
+1. **Resolution at distant horizons:** Beyond 120–150 m, LiDAR beam angular divergence reduces point density; small objects with cross-sections under $10 \times 10$ cm may be captured by only $1 \dots 3$ points;
+2. **Constrained clearance portals:** In the opening of heavy blast gates on curves, clearance to the steel portal frame narrows to $5 \dots 10$ cm, triggering expected `WARNING` alerts;
+3. **Dense airborne dust:** Under extreme tunnel dust conditions with suspended cement particles, multi-sensor fusion with radar or vision channels is recommended;
+4. **Spatial periodicity of cast-iron tunnel lining:** In circular shield tunnels, regular spacing of cast-iron tubbings (~1 m) can introduce correlogram peak aliasing during 1D cross-correlation velocity estimation. In `TrainVelocityEstimator`, this is mitigated through median derivative filtering, historical maximum tracking, and acceleration/odometry bounds.
 
 ---
